@@ -1,0 +1,30 @@
+# Local Python/build environments
+.build-venv-macos/
+.build-venv-windows/
+.venv/
+venv/
+
+# Native outputs
+dist-macos/
+dist-windows/
+source/build/
+source/dist/
+source/*.build/
+source/*.dist/
+source/pysidedeploy.spec
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# macOS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Signing material must never be committed
+*.p12
+*.p8
+*.cer
+*.crt
+*.key
