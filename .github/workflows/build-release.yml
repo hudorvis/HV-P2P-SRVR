@@ -1,4 +1,4 @@
-name: Build Signed HV P2P SRVR v26.08.15.06
+name: Build HV P2P SRVR — macOS Intel Test
 
 on:
   workflow_dispatch:
@@ -10,24 +10,14 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: v26.08.15.06
+  APP_VERSION: v26.08.15.07
   APP_NAME: HV P2P SRVR
 
 jobs:
-  macos:
-    name: macOS ${{ matrix.label }} — Signed + Notarised
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            label: Apple Silicon
-            slug: Apple-Silicon
-          - runner: macos-15-intel
-            label: Intel
-            slug: Intel
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+  macos-intel:
+    name: macOS Intel — Fast Unsigned Test Build
+    runs-on: macos-15-intel
+    timeout-minutes: 60
 
     steps:
       - name: Checkout SRVR source
@@ -37,88 +27,6 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-
-      - name: Validate GitHub signing secrets
-        env:
-          P12_B64: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          NOTARY_KEY_B64: ${{ secrets.APPLE_NOTARY_KEY }}
-          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=0
-          for item in P12_B64 P12_PASSWORD SIGNING_IDENTITY NOTARY_KEY_B64 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
-            if [ -z "${!item:-}" ]; then
-              echo "::error::Missing required GitHub Actions secret backing $item"
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then exit 2; fi
-
-      - name: Import Apple Developer ID certificate
-        env:
-          P12_B64: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          CERT_PATH="$RUNNER_TEMP/hv-p2p-developer-id.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/hv-p2p-build.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
-
-          python3 - "$CERT_PATH" <<'PY'
-          import base64, os, sys
-          raw = os.environ['P12_B64'].strip()
-          with open(sys.argv[1], 'wb') as f:
-              f.write(base64.b64decode(raw))
-          PY
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" \
-            -k "$KEYCHAIN_PATH" \
-            -P "$P12_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
-
-          echo "Available code-signing identities:"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$SIGNING_IDENTITY" >/dev/null || {
-            echo "::error::MACOS_SIGNING_IDENTITY does not match the imported Developer ID certificate"
-            exit 3
-          }
-
-          echo "HV_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "APPLE_SIGN_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
-
-      - name: Prepare App Store Connect notarisation key
-        env:
-          NOTARY_KEY_B64: ${{ secrets.APPLE_NOTARY_KEY }}
-          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          KEY_PATH="$RUNNER_TEMP/AuthKey_${NOTARY_KEY_ID}.p8"
-          python3 - "$KEY_PATH" <<'PY'
-          import base64, os, sys
-          raw = os.environ['NOTARY_KEY_B64'].strip()
-          with open(sys.argv[1], 'wb') as f:
-              f.write(base64.b64decode(raw))
-          PY
-          chmod 600 "$KEY_PATH"
-          echo "APPLE_NOTARY_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
-          echo "APPLE_NOTARY_KEY_ID=$NOTARY_KEY_ID" >> "$GITHUB_ENV"
-          echo "APPLE_NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID" >> "$GITHUB_ENV"
 
       - name: Validate source
         shell: bash
@@ -132,70 +40,33 @@ jobs:
       - name: Build self-contained Qt application
         shell: bash
         run: |
-          chmod +x build/build_macos.sh build/sign_and_notarize_macos.sh
+          chmod +x build/build_macos.sh
           ./build/build_macos.sh
 
-      - name: Developer ID sign + Apple notarise + staple
+      - name: Verify application bundle exists
         shell: bash
         run: |
-          ./build/sign_and_notarize_macos.sh "dist-macos/${APP_NAME} ${APP_VERSION}.app"
+          set -euo pipefail
+          APP="dist-macos/${APP_NAME} ${APP_VERSION}.app"
+          test -d "$APP"
+          echo "Built test app: $APP"
+          du -sh "$APP" || true
 
-      - name: Package signed macOS application
+      - name: Package macOS Intel test application
         shell: bash
         run: |
-          OUT="${APP_NAME} ${APP_VERSION} macOS ${{ matrix.label }} Signed.zip"
+          set -euo pipefail
+          APP="dist-macos/${APP_NAME} ${APP_VERSION}.app"
+          OUT="${APP_NAME} ${APP_VERSION} macOS Intel Test.zip"
           rm -f "$OUT"
-          ditto -c -k --keepParent "dist-macos/${APP_NAME} ${APP_VERSION}.app" "$OUT"
+          ditto -c -k --keepParent "$APP" "$OUT"
           echo "MACOS_ARTIFACT=$OUT" >> "$GITHUB_ENV"
 
-      - name: Upload signed macOS artifact
+      - name: Upload macOS Intel test artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HV-P2P-SRVR-${{ env.APP_VERSION }}-macOS-${{ matrix.slug }}-Signed
-          path: HV P2P SRVR v26.08.15.06 macOS ${{ matrix.label }} Signed.zip
+          name: HV-P2P-SRVR-${{ env.APP_VERSION }}-macOS-Intel-Test
+          path: HV P2P SRVR v26.08.15.07 macOS Intel Test.zip
           if-no-files-found: error
           compression-level: 0
-          retention-days: 30
-
-      - name: Remove temporary signing keychain
-        if: always()
-        shell: bash
-        run: |
-          if [ -n "${HV_KEYCHAIN_PATH:-}" ] && [ -f "$HV_KEYCHAIN_PATH" ]; then
-            security delete-keychain "$HV_KEYCHAIN_PATH" || true
-          fi
-
-  windows:
-    name: Windows x64
-    runs-on: windows-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout SRVR source
-        uses: actions/checkout@v7
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-
-      - name: Validate source
-        shell: pwsh
-        run: |
-          python -m py_compile `
-            source/main.py `
-            source/bridge.py `
-            source/backend_worker.py `
-            source/hv_p2p_legacy_core.py
-
-      - name: Build self-contained Windows application
-        shell: pwsh
-        run: ./build/build_windows.ps1
-
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: HV-P2P-SRVR-${{ env.APP_VERSION }}-Windows-x64
-          path: dist-windows/HV P2P SRVR v26.08.15.06.exe
-          if-no-files-found: error
-          retention-days: 30
+          retention-days: 3

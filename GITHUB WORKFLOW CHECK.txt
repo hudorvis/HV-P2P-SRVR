@@ -1,8 +1,15 @@
-HV P2P SRVR v26.08.15.06
-The active GitHub Actions workflow is included in this package at:
-  .github/workflows/build-release.yml
+HV P2P SRVR v26.08.15.07
 
-Workflow SHA-256: 60b7448cb2cc3f70cf5d5fa0e2cb3449bb63bc3324cb55ceac0b8151953cd710
-Workflow size: 6787 bytes
+EXPECTED WORKFLOW:
+.github/workflows/build-release.yml
 
-If Finder does not show .github, press Command + Shift + .
+EXPECTED ACTION NAME:
+Build HV P2P SRVR — macOS Intel Test
+
+EXPECTED SINGLE JOB:
+macOS Intel — Fast Unsigned Test Build
+
+EXPECTED ARTIFACT:
+HV-P2P-SRVR-v26.08.15.07-macOS-Intel-Test
+
+No signing/notarisation secrets are used by this development workflow.

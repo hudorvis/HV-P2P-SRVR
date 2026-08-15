@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/source"
 DIST="$ROOT/dist-macos"
 VENV="$ROOT/.build-venv-macos"
-VERSION="v26.08.15.06"
+VERSION="v26.08.15.07"
 APP_NAME="HV P2P SRVR"
 
 printf '\nHV P2P SRVR %s — macOS Qt/QML build\n' "$VERSION"

@@ -17,7 +17,7 @@ class BackendBridge(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._snapshot = {
-            "version": "v26.08.15.06",
+            "version": "v26.08.15.07",
             "connections": {"ctrl": False, "w1p": False, "freeD": False},
             "safety": {"level": "warning", "text": "STARTING", "sources": []},
             "run": {"speed": 0.0, "maxSpeed": 0.0, "driveMode": "Mode 1", "driveModeIndex": 0,

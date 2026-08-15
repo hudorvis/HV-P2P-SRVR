@@ -17,7 +17,7 @@ set -euo pipefail
 
 APP="${1:-}"
 if [ -z "$APP" ] || [ ! -d "$APP" ]; then
-  echo "Usage: $0 '/path/HV P2P SRVR v26.08.15.06.app'" >&2
+  echo "Usage: $0 '/path/HV P2P SRVR v26.08.15.07.app'" >&2
   exit 2
 fi
 

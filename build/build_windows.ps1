@@ -3,7 +3,7 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Src = Join-Path $Root "source"
 $Dist = Join-Path $Root "dist-windows"
 $Venv = Join-Path $Root ".build-venv-windows"
-$Version = "v26.08.15.06"
+$Version = "v26.08.15.07"
 $Python = (Get-Command python -ErrorAction Stop).Source
 
 Write-Host "HV P2P SRVR $Version - Windows Qt/QML build"

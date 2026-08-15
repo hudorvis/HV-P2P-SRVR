@@ -1,59 +1,23 @@
-HV P2P SRVR v26.08.15.06 — GITHUB UPLOAD
-============================================================
+HV P2P SRVR v26.08.15.07 — FAST GITHUB TEST BUILD
 
-THIS PACKAGE IS COMPLETE.
+This development revision builds MACOS INTEL ONLY.
 
-The GitHub Actions workflow IS included at:
+There is NO Apple Developer ID signing or notarisation in this test workflow.
+There is NO Apple Silicon build.
+There is NO Windows build.
 
-    .github/workflows/build-release.yml
+NORMAL PROCESS
 
-IMPORTANT FOR macOS FINDER
----------------------------
-Finder hides folders whose names begin with a dot. This means the `.github`
-folder may look as though it is missing even though it is inside this package.
+1. Keep using your existing cloned HV-P2P-SRVR repository in GitHub Desktop.
+2. Copy the contents of this revision into that existing repository folder.
+3. Do not delete the hidden .git folder in the repository.
+4. Commit to main in GitHub Desktop.
+5. Push origin.
+6. GitHub Actions starts automatically.
+7. Download the macOS Intel Test artifact when the job is green.
+8. Approve the unsigned app manually in macOS Privacy & Security if required.
 
-Before selecting the files for a browser upload to GitHub, press:
+The actual workflow remains at:
+.github/workflows/build-release.yml
 
-    Command + Shift + .
-
-That toggles hidden files on. You should then see `.github` beside `build`
-and `source`.
-
-UPLOAD THE CONTENTS OF THIS FOLDER TO THE ROOT OF YOUR REPOSITORY.
-The repository root must look like this:
-
-    .github/
-        workflows/
-            build-release.yml
-    build/
-    source/
-    .gitignore
-    README.md
-    Approved Run Design Reference.png
-    GITHUB UPLOAD - READ ME FIRST.txt
-
-Do NOT upload only this ZIP as a single file; GitHub Actions cannot run a
-workflow that remains inside a ZIP.
-
-When committed to the `main` branch, GitHub Actions should automatically start:
-
-    Build Signed HV P2P SRVR v26.08.15.06
-
-It can also be started manually from GitHub > Actions > Run workflow.
-
-Expected outputs:
-
-  • macOS Apple Silicon — signed + notarised + stapled
-  • macOS Intel — signed + notarised + stapled
-  • Windows x64 — self-contained executable
-
-Required GitHub Actions secrets:
-
-  MACOS_CERTIFICATE_P12
-  MACOS_CERTIFICATE_PASSWORD
-  MACOS_SIGNING_IDENTITY
-  APPLE_NOTARY_KEY
-  APPLE_NOTARY_KEY_ID
-  APPLE_NOTARY_ISSUER_ID
-
-Never upload the original .p12 or .p8 signing files to the repository.
+Finder hides .github, but GitHub Desktop tracks and uploads it normally.
