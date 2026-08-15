@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-APP_VERSION = "v26.08.15.05"
+APP_VERSION = "v26.08.15.06"
 
 
 def _run_backend_mode() -> int:

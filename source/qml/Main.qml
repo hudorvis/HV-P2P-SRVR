@@ -11,7 +11,7 @@ ApplicationWindow {
     minimumWidth: 1180
     minimumHeight: 760
     color: "#060d14"
-    title: "HV P2P SRVR v26.08.15.05"
+    title: "HV P2P SRVR v26.08.15.06"
     flags: Qt.Window | Qt.FramelessWindowHint
     property int pageIndex: 0
     property var s: backend.snapshot
@@ -70,7 +70,7 @@ ApplicationWindow {
                 }
                 Item{Layout.fillWidth:true}
                 Text {
-                    text:String((s&&s.version)||"v26.08.15.05")
+                    text:String((s&&s.version)||"v26.08.15.06")
                     color:"#8c9aa7"
                     font.pixelSize:14
                     Layout.alignment:Qt.AlignVCenter

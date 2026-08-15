@@ -1,0 +1,59 @@
+HV P2P SRVR v26.08.15.06 — GITHUB UPLOAD
+============================================================
+
+THIS PACKAGE IS COMPLETE.
+
+The GitHub Actions workflow IS included at:
+
+    .github/workflows/build-release.yml
+
+IMPORTANT FOR macOS FINDER
+---------------------------
+Finder hides folders whose names begin with a dot. This means the `.github`
+folder may look as though it is missing even though it is inside this package.
+
+Before selecting the files for a browser upload to GitHub, press:
+
+    Command + Shift + .
+
+That toggles hidden files on. You should then see `.github` beside `build`
+and `source`.
+
+UPLOAD THE CONTENTS OF THIS FOLDER TO THE ROOT OF YOUR REPOSITORY.
+The repository root must look like this:
+
+    .github/
+        workflows/
+            build-release.yml
+    build/
+    source/
+    .gitignore
+    README.md
+    Approved Run Design Reference.png
+    GITHUB UPLOAD - READ ME FIRST.txt
+
+Do NOT upload only this ZIP as a single file; GitHub Actions cannot run a
+workflow that remains inside a ZIP.
+
+When committed to the `main` branch, GitHub Actions should automatically start:
+
+    Build Signed HV P2P SRVR v26.08.15.06
+
+It can also be started manually from GitHub > Actions > Run workflow.
+
+Expected outputs:
+
+  • macOS Apple Silicon — signed + notarised + stapled
+  • macOS Intel — signed + notarised + stapled
+  • Windows x64 — self-contained executable
+
+Required GitHub Actions secrets:
+
+  MACOS_CERTIFICATE_P12
+  MACOS_CERTIFICATE_PASSWORD
+  MACOS_SIGNING_IDENTITY
+  APPLE_NOTARY_KEY
+  APPLE_NOTARY_KEY_ID
+  APPLE_NOTARY_ISSUER_ID
+
+Never upload the original .p12 or .p8 signing files to the repository.

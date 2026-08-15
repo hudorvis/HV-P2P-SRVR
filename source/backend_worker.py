@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hidden legacy backend worker for HV P2P SRVR v26.08.15.05.
+"""Hidden legacy backend worker for HV P2P SRVR v26.08.15.06.
 
 The proven v26.06.26.25 Tk backend runs in this *separate process* with its
 window withdrawn.  The visible application is Qt Quick/QML.  JSON lines on
@@ -25,7 +25,7 @@ sys.stdout = sys.stderr
 import tkinter as tk
 import hv_p2p_legacy_core as legacy
 
-APP_VERSION = "v26.08.15.05"
+APP_VERSION = "v26.08.15.06"
 
 def _user_config_path() -> str:
     if sys.platform == "darwin":

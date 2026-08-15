@@ -1,6 +1,6 @@
 [project]
 name = "hv-p2p-srvr"
-version = "26.8.15.5"
+version = "26.8.15.6"
 requires-python = ">=3.10"
 
 [tool.pyside6-project]

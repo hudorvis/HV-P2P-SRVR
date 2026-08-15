@@ -1,4 +1,4 @@
-# HV P2P SRVR v26.08.15.05
+# HV P2P SRVR v26.08.15.06
 
 First **GitHub Actions release-build revision** of the Qt Quick / QML HV P2P SRVR.
 
@@ -14,7 +14,7 @@ First **GitHub Actions release-build revision** of the Qt Quick / QML HV P2P SRV
 - Both views retain limits, ramp zones, Ref, presets, skate and camera FOV.
 - Coordinate wording remains **X (Tracking) / Y (Sag) / Z (Offset)**.
 
-## What is new in v26.08.15.05
+## What is new in v26.08.15.06
 
 This revision is prepared so GitHub Actions is the normal build machine.
 
@@ -46,19 +46,19 @@ Never put `.p12`, `.p8`, passwords or Base64 private-key material in the reposit
 3. Upload/commit the **contents** of this folder to the root of the repository. The root should contain `source/`, `build/`, `.github/`, `.gitignore`, `README.md`, and the design reference image.
 4. Commit to the `main` branch.
 5. Open the repository's **Actions** tab.
-6. Select **Build Signed HV P2P SRVR v26.08.15.05**.
+6. Select **Build Signed HV P2P SRVR v26.08.15.06**.
 7. The push to `main` should start it automatically. You can also use **Run workflow** manually.
 8. Wait for the desired job to turn green.
 9. Open the completed workflow run and download the artifact from the **Artifacts** section.
 
 Expected macOS artifacts:
 
-- `HV-P2P-SRVR-v26.08.15.05-macOS-Apple-Silicon-Signed`
-- `HV-P2P-SRVR-v26.08.15.05-macOS-Intel-Signed`
+- `HV-P2P-SRVR-v26.08.15.06-macOS-Apple-Silicon-Signed`
+- `HV-P2P-SRVR-v26.08.15.06-macOS-Intel-Signed`
 
 Expected Windows artifact:
 
-- `HV-P2P-SRVR-v26.08.15.05-Windows-x64`
+- `HV-P2P-SRVR-v26.08.15.06-Windows-x64`
 
 The macOS artifact contains a self-contained `.app`; the Mac does not need Python installed to run the built application.
 
