@@ -1,5 +1,5 @@
 # ==============================================================
-# HV P2P SRVR v26.06.26.25
+# HV P2P SRVR v26.08.17.01
 #
 # Server-side control application for HV P2P systems. Original dark colour scheme with Free-D top/side views with Free-D top/side views, ShotOver input table, camera cone overlays, and high-rate threaded Free-D output.
 #
@@ -16,7 +16,7 @@
 #
 #!/usr/bin/env python3
 """
-HV P2P SRVR v26.06.26.25 (Tkinter)
+HV P2P SRVR v26.08.17.01 (Tkinter)
 
 - RS485 must be explicitly Connected before Active is permitted.
 - RS485 and ADS1115 interface losses create named red safety states.
@@ -162,7 +162,7 @@ TAB_LABEL_PADX = (12, 6)
 TAB_VALUE_PADX = (6, 12)
 TAB_ACTION_BUTTON_PADY = (0, 2)
 TAB_ACTION_STATUS_PADY = (1, 2)
-PRESET_COUNT = 6
+PRESET_COUNT = 10
 
 AUX_ACTION_OPTIONS = [
     "Accel Mode",
@@ -176,6 +176,10 @@ AUX_ACTION_OPTIONS = [
     "Goto P4",
     "Goto P5",
     "Goto P6",
+    "Goto P7",
+    "Goto P8",
+    "Goto P9",
+    "Goto P10",
     "Goto Ref",
     "Slip Far",
     "Slip Near",
@@ -185,6 +189,10 @@ AUX_ACTION_OPTIONS = [
     "Slip P4",
     "Slip P5",
     "Slip P6",
+    "Slip P7",
+    "Slip P8",
+    "Slip P9",
+    "Slip P10",
     "Slip Ref",
     "Limit Calibration",
     "Winch Calibration",
@@ -3764,11 +3772,12 @@ class HVP2PServerApp:
                 {"name": "Mode B", "max_speed_mps": 20.0, "max_goto_speed_mps": 1.0, "goto_speed_unit": "m/s", "max_accel_mps2": 2.0, "max_decel_mps2": 2.0, "max_crossover_mps2": 4.0, "max_stop_decel_mps2": 4.0},
             ]
         if len(self.drive_modes) >= 2:
-            # Migrate old defaults only; preserve any custom names the operator has entered.
-            if str(self.drive_modes[0].get("name", "")).strip() in ("", "Mode 1"):
-                self.drive_modes[0]["name"] = "Mode A"
-            if str(self.drive_modes[1].get("name", "")).strip() in ("", "Mode 2"):
-                self.drive_modes[1]["name"] = "Mode B"
+            # v26.08.17.01: keep the locked UI defaults Mode 1 / Mode 2.
+            # Preserve any operator-renamed custom names from config.
+            if not str(self.drive_modes[0].get("name", "")).strip():
+                self.drive_modes[0]["name"] = "Mode 1"
+            if not str(self.drive_modes[1].get("name", "")).strip():
+                self.drive_modes[1]["name"] = "Mode 2"
             self._sync_drive_mode_legacy_name_keys()
         if not hasattr(self, "active_drive_mode"):
             self.active_drive_mode = 0
@@ -9406,6 +9415,13 @@ Slip offset by {abs(slip_correction):0.2f} m.""",
             self._update_limits_ui()
         except Exception:
             pass
+
+
+# ------------------------------------------------------------
+# v26.08.17.01 modern locked-design UI skin
+# ------------------------------------------------------------
+from hv_p2p_modern_ui import install_modern_ui as _install_modern_ui
+_install_modern_ui(HVP2PServerApp, globals())
 
 
 # ------------------------------------------------------------

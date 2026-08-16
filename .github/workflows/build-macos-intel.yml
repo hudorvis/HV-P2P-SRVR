@@ -1,0 +1,112 @@
+name: HV P2P SRVR - macOS Intel Test Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'HV_P2P_SRVR_v26.08.17.01.py'
+      - 'hv_p2p_modern_ui.py'
+      - 'assets/**'
+      - '.github/workflows/build-macos-intel.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos-intel:
+    name: Build macOS Intel
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirm Intel runner
+        shell: bash
+        run: |
+          set -euxo pipefail
+          uname -a
+          test "$(uname -m)" = "x86_64"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python - <<'PY'
+          import tkinter
+          print('Tk:', tkinter.TkVersion)
+          PY
+
+      - name: Syntax check
+        shell: bash
+        run: |
+          python -m py_compile HV_P2P_SRVR_v26.08.17.01.py hv_p2p_modern_ui.py
+
+      - name: Create app icon
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build/AppIcon.iconset
+          sips -z 16 16     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_16x16.png
+          sips -z 32 32     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_16x16@2x.png
+          sips -z 32 32     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_32x32.png
+          sips -z 64 64     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_32x32@2x.png
+          sips -z 128 128   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_128x128.png
+          sips -z 256 256   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_128x128@2x.png
+          sips -z 256 256   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_256x256.png
+          sips -z 512 512   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_256x256@2x.png
+          sips -z 512 512   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_512x512.png
+          cp assets/HV_P2P_SRVR_icon.png build/AppIcon.iconset/icon_512x512@2x.png
+          iconutil -c icns build/AppIcon.iconset -o build/HV_P2P_SRVR.icns
+
+      - name: Build unsigned macOS app
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m PyInstaller \
+            --noconfirm \
+            --clean \
+            --windowed \
+            --onedir \
+            --name "HV P2P SRVR" \
+            --icon build/HV_P2P_SRVR.icns \
+            --osx-bundle-identifier "au.h-v.hvp2p.srvr" \
+            HV_P2P_SRVR_v26.08.17.01.py
+
+          test -d "dist/HV P2P SRVR.app"
+          file "dist/HV P2P SRVR.app/Contents/MacOS/HV P2P SRVR"
+          lipo -info "dist/HV P2P SRVR.app/Contents/MacOS/HV P2P SRVR" || true
+
+      - name: Package test release
+        shell: bash
+        run: |
+          set -euxo pipefail
+          RELEASE_DIR="release/HV P2P SRVR v26.08.17.01"
+          mkdir -p "$RELEASE_DIR"
+          cp -R "dist/HV P2P SRVR.app" "$RELEASE_DIR/"
+          cp HV_P2P_SRVR_v26.08.17.01.py "$RELEASE_DIR/"
+          cp hv_p2p_modern_ui.py "$RELEASE_DIR/"
+          cp README_TEST_BUILD.txt "$RELEASE_DIR/"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RELEASE_DIR" \
+            "HV P2P SRVR v26.08.17.01 macOS Intel.zip"
+
+      - name: Upload macOS Intel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HV-P2P-SRVR-v26.08.17.01-macOS-Intel
+          path: HV P2P SRVR v26.08.17.01 macOS Intel.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
