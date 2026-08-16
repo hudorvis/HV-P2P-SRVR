@@ -1,25 +1,28 @@
-name: HV P2P SRVR - macOS Intel Test Build
+name: HV P2P SRVR - Qt Quick macOS Intel Test Build
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
     paths:
-      - 'HV_P2P_SRVR_v26.08.17.01.py'
-      - 'hv_p2p_modern_ui.py'
+      - 'main.py'
+      - 'backend.py'
+      - 'qml/**'
+      - 'resources.qrc'
+      - 'requirements.txt'
       - 'assets/**'
       - '.github/workflows/build-macos-intel.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-macos-intel:
-    name: Build macOS Intel
     runs-on: macos-15-intel
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      APP_VERSION: '26.08.17.02'
+      QT_QUICK_CONTROLS_STYLE: Basic
 
     steps:
       - name: Checkout
@@ -38,22 +41,31 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install build tools
+      - name: Install Qt for Python
         shell: bash
         run: |
+          set -euxo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python - <<'PY'
-          import tkinter
-          print('Tk:', tkinter.TkVersion)
+          import PySide6
+          print('PySide6:', PySide6.__version__)
           PY
 
-      - name: Syntax check
+      - name: Generate embedded Qt resources
         shell: bash
         run: |
-          python -m py_compile HV_P2P_SRVR_v26.08.17.01.py hv_p2p_modern_ui.py
+          set -euxo pipefail
+          pyside6-rcc resources.qrc -o resources_rc.py
+          python -m py_compile main.py backend.py resources_rc.py
 
-      - name: Create app icon
+      - name: QML lint
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pyside6-qmllint qml/Main.qml qml/components/*.qml
+
+      - name: Build app icon
         shell: bash
         run: |
           set -euxo pipefail
@@ -70,43 +82,74 @@ jobs:
           cp assets/HV_P2P_SRVR_icon.png build/AppIcon.iconset/icon_512x512@2x.png
           iconutil -c icns build/AppIcon.iconset -o build/HV_P2P_SRVR.icns
 
-      - name: Build unsigned macOS app
+      - name: Deploy Qt Quick macOS application
         shell: bash
         run: |
           set -euxo pipefail
-          python -m PyInstaller \
-            --noconfirm \
-            --clean \
-            --windowed \
-            --onedir \
-            --name "HV P2P SRVR" \
-            --icon build/HV_P2P_SRVR.icns \
-            --osx-bundle-identifier "au.h-v.hvp2p.srvr" \
-            HV_P2P_SRVR_v26.08.17.01.py
+          # pyside6-deploy is Qt for Python's deployment tool. It scans the QML
+          # sources and produces a normal macOS .app using Nuitka.
+          pyside6-deploy main.py -f --name "HV P2P SRVR" --extra-modules=Quick,Qml,Gui,Network
 
-          test -d "dist/HV P2P SRVR.app"
-          file "dist/HV P2P SRVR.app/Contents/MacOS/HV P2P SRVR"
-          lipo -info "dist/HV P2P SRVR.app/Contents/MacOS/HV P2P SRVR" || true
+          APP_PATH="$(find . -type d -name '*.app' -not -path './.git/*' | head -n 1)"
+          test -n "$APP_PATH"
+          echo "Built app: $APP_PATH"
 
-      - name: Package test release
+          mkdir -p release
+          rm -rf "release/HV P2P SRVR.app"
+          ditto "$APP_PATH" "release/HV P2P SRVR.app"
+
+          # Add our icon to the bundle if the deployment tool used its default.
+          mkdir -p "release/HV P2P SRVR.app/Contents/Resources"
+          cp build/HV_P2P_SRVR.icns "release/HV P2P SRVR.app/Contents/Resources/HV_P2P_SRVR.icns"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName HV P2P SRVR" "release/HV P2P SRVR.app/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName HV P2P SRVR" "release/HV P2P SRVR.app/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier au.h-v.hvp2p.srvr" "release/HV P2P SRVR.app/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "release/HV P2P SRVR.app/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_VERSION}" "release/HV P2P SRVR.app/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleIconFile" "release/HV P2P SRVR.app/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string HV_P2P_SRVR.icns" "release/HV P2P SRVR.app/Contents/Info.plist"
+
+          EXE="$(find 'release/HV P2P SRVR.app/Contents/MacOS' -type f -perm +111 | head -n 1)"
+          test -n "$EXE"
+          file "$EXE"
+          lipo -info "$EXE" || true
+
+      - name: Package exactly one app in exactly one ZIP
         shell: bash
         run: |
           set -euxo pipefail
-          RELEASE_DIR="release/HV P2P SRVR v26.08.17.01"
-          mkdir -p "$RELEASE_DIR"
-          cp -R "dist/HV P2P SRVR.app" "$RELEASE_DIR/"
-          cp HV_P2P_SRVR_v26.08.17.01.py "$RELEASE_DIR/"
-          cp hv_p2p_modern_ui.py "$RELEASE_DIR/"
-          cp README_TEST_BUILD.txt "$RELEASE_DIR/"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$RELEASE_DIR" \
-            "HV P2P SRVR v26.08.17.01 macOS Intel.zip"
+          ZIP="HV P2P SRVR v${APP_VERSION} macOS Intel.zip"
+          rm -f "$ZIP"
+          ditto -c -k --sequesterRsrc --keepParent "release/HV P2P SRVR.app" "$ZIP"
+          unzip -l "$ZIP"
+          # The ZIP must contain the .app bundle and no sibling .py/.txt/source files.
+          python - <<'PY'
+          import zipfile, os
+          version=os.environ['APP_VERSION']
+          z=f'HV P2P SRVR v{version} macOS Intel.zip'
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist()
+          assert names, 'empty ZIP'
+          assert all(n.startswith('HV P2P SRVR.app/') or n == 'HV P2P SRVR.app/' for n in names), names[:20]
+          assert not any(n.endswith('.py') or n.endswith('.txt') for n in names), 'source file leaked into release ZIP'
+          print('Release ZIP verified: one .app bundle only')
+          PY
 
-      - name: Upload macOS Intel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: HV-P2P-SRVR-v26.08.17.01-macOS-Intel
-          path: HV P2P SRVR v26.08.17.01 macOS Intel.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
+      - name: Publish single ZIP as a GitHub prerelease asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          TAG="v${APP_VERSION}-qtquick-test"
+          ZIP="HV P2P SRVR v${APP_VERSION} macOS Intel.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            gh release create "$TAG" "$ZIP" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "HV P2P SRVR v${APP_VERSION} - Qt Quick macOS Intel Test" \
+              --notes "Qt Quick/PySide6 development test build. macOS Intel only. No Developer ID signing or notarisation. Download the single ZIP asset; it contains only HV P2P SRVR.app."
+          fi
+          gh release view "$TAG" --json url -q .url
