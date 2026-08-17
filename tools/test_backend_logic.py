@@ -2,6 +2,7 @@
 """Focused regression tests for safety/motion/calibration protocol behaviour."""
 from __future__ import annotations
 
+import json
 import math
 import os
 import tempfile
@@ -28,7 +29,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.12", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.13", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -128,6 +129,73 @@ try:
     b.setJoystickDeadband(4.0)
     b.applySetupSettings()
     assert abs(float(b.joystickDeadband) - 4.0) < 1e-9
+
+    # Joystick Calibration is a real three-step Left/Centre/Right wizard. Moving
+    # the stick while it is open must never generate motion, and the captured
+    # values must produce a centred, full-scale corrected axis.
+    b._not_calibrated = False
+    now = time.time(); b._ctrl_rx_times.clear(); b._ctrl_rx_times.extend([now - 0.05, now])
+    b.w1p.last_seen = now; b.winch_rs_status = "Connected"; b._ctrl_flags = 0
+    b.state.near_limit.position_m = 0.0; b.state.far_limit.position_m = 100.0; b.state.pos_m = 50.0
+    b._ctrl_axis = 0.75
+    b.last_sent_vel = 1.0; b.requested_speed_mps = 1.0
+    # If invoked after a service calibration, opening joystick calibration must
+    # close that calibration and return W1P service mode to its normal state.
+    b.calibration_open = True; b.calibration_type = "Limit"; b._last_service_mode_sent = 1
+    b.openJoystickCalibration()
+    assert not b.calibration_open and b._last_service_mode_sent == 0
+    assert b.joystickCalibrationOpen and b.joystickCalibrationStep == 0
+    b._motion_tick()
+    assert abs(b.requested_speed_mps) < 1e-9, "joystick calibration allowed winch motion"
+    b._ctrl_axis = -0.82; b.joystickCalibrationNext()
+    assert b.joystickCalibrationStep == 1
+    b._ctrl_axis = 0.08; b.joystickCalibrationNext()
+    assert b.joystickCalibrationStep == 2
+    # Reject an endpoint too close to Centre, then accept a proper Right point.
+    b._ctrl_axis = 0.10; b.joystickCalibrationNext()
+    assert b.joystickCalibrationOpen and b.joystickCalibrationError
+    b._ctrl_axis = 0.91; b.joystickCalibrationNext()
+    assert not b.joystickCalibrationOpen and not b.joystickCalibrationError
+    assert abs(b._calibrated_joystick(-0.82) + 1.0) < 1e-9
+    assert abs(b._calibrated_joystick(0.08)) < 1e-9
+    assert abs(b._calibrated_joystick(0.91) - 1.0) < 1e-9
+    saved = json.loads(b._config_path.read_text())["joystick_calibration"]
+    assert abs(float(saved["left"]) + 0.82) < 1e-9
+    assert abs(float(saved["centre"]) - 0.08) < 1e-9
+    assert abs(float(saved["right"]) - 0.91) < 1e-9
+
+    # Completing at full Right must not turn into an immediate live motion command.
+    assert b._joystick_neutral_required
+    b._ctrl_axis = 0.91; b.last_sent_vel = 1.0; b.requested_speed_mps = 1.0
+    b._motion_tick()
+    assert abs(b.requested_speed_mps) < 1e-9 and b._joystick_neutral_required
+    b._ctrl_axis = 0.08; b._motion_tick()
+    assert abs(b.requested_speed_mps) < 1e-9 and not b._joystick_neutral_required
+
+    # Cancel while displaced has the same neutral-return interlock and does not
+    # alter the last accepted calibration values.
+    before_cancel = (b.joystick_cal_left, b.joystick_cal_centre, b.joystick_cal_right)
+    b.openJoystickCalibration(); b._ctrl_axis = -0.70; b.joystickCalibrationNext(); b.cancelJoystickCalibration()
+    assert (b.joystick_cal_left, b.joystick_cal_centre, b.joystick_cal_right) == before_cancel
+    assert b._joystick_neutral_required
+    b._ctrl_axis = b.joystick_cal_centre; b._motion_tick()
+    assert not b._joystick_neutral_required and abs(b.requested_speed_mps) < 1e-9
+    # A user-configured 0% operating deadband must not make the release interlock
+    # impossible to clear at Centre.
+    old_deadband = b.joystick_deadband_pct
+    b.joystick_deadband_pct = 0.0; b._joystick_neutral_required = True
+    b._ctrl_axis = b.joystick_cal_centre; b._motion_tick()
+    assert not b._joystick_neutral_required and abs(b.requested_speed_mps) < 1e-9
+    b.joystick_deadband_pct = old_deadband
+
+    # Electrical reversal is also valid: physical Left must still map to -1.
+    b.joystick_cal_left, b.joystick_cal_centre, b.joystick_cal_right = 0.80, 0.10, -0.70
+    assert abs(b._calibrated_joystick(0.80) + 1.0) < 1e-9
+    assert abs(b._calibrated_joystick(0.10)) < 1e-9
+    assert abs(b._calibrated_joystick(-0.70) - 1.0) < 1e-9
+    # Restore identity calibration so legacy motion assertions remain unchanged.
+    b.joystick_cal_left, b.joystick_cal_centre, b.joystick_cal_right = -1.0, 0.0, 1.0
+    b._save_config(); b._saved_setup_snapshot = b._setup_snapshot()
 
     # The deadband remains the proven 5% by default, but is now the Setup value.
     b._not_calibrated = False

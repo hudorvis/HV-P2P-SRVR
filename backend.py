@@ -133,8 +133,9 @@ class HVP2PBackend(QObject):
     configChanged = Signal()         # operator-editable configuration updates
     logChanged = Signal()
     calibrationChanged = Signal()
+    joystickCalibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.12", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.13", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
@@ -152,6 +153,12 @@ class HVP2PBackend(QObject):
         self.reverse_joystick = False
         self.reverse_motor = False
         self.joystick_deadband_pct = JOY_DEADBAND_PCT
+        # Joystick calibration maps the CTRL raw -1..+1 value onto a corrected
+        # -1..+1 operator axis. Defaults are identity so existing systems behave
+        # exactly as before until the wizard is completed.
+        self.joystick_cal_left = -1.0
+        self.joystick_cal_centre = 0.0
+        self.joystick_cal_right = 1.0
         self.position_source = "Encoder"
         self.ctrl_aux_assignments = [
             "Drive Mode", "Near Limit Save", "Preset 5 Recall",
@@ -254,6 +261,19 @@ class HVP2PBackend(QObject):
         self.calibration_type = "Limit"
         self.calibration_step = 0
         self.calibration_title = "Set Near Limit"
+
+        # Three-step joystick calibration wizard. Temporary captures are kept
+        # separate until Right is accepted, so Cancel never alters calibration.
+        self.joystick_calibration_open = False
+        self.joystick_calibration_step = 0
+        self.joystick_calibration_title = "Set Joystick Left"
+        self.joystick_calibration_error = ""
+        self._joystick_cal_pending = {"left": None, "centre": None, "right": None}
+        # After a joystick-calibration wizard closes, motion stays inhibited until
+        # the operator releases the stick back into the configured deadband. This
+        # prevents the final full-Right capture (or a Cancel while displaced) from
+        # immediately becoming a live motion command on the next 50 ms tick.
+        self._joystick_neutral_required = False
 
         self._config_path = self._config_file_path()
         self._load_config()
@@ -379,6 +399,29 @@ class HVP2PBackend(QObject):
             else: return None
             return flags, max(-1.0, min(1.0, float(joy)))
         except Exception: return None
+
+    def _calibrated_joystick(self, raw: float) -> float:
+        """Piecewise-normalise a raw joystick sample around the captured centre.
+
+        The mapping deliberately supports controllers whose electrical direction
+        is reversed: the physical Left capture always maps to -1 and Right to +1.
+        The separate CTRL Direction setting is then applied afterwards.
+        """
+        raw = max(-1.0, min(1.0, float(raw)))
+        left = float(self.joystick_cal_left)
+        centre = float(self.joystick_cal_centre)
+        right = float(self.joystick_cal_right)
+        lspan = left - centre
+        rspan = right - centre
+        if abs(lspan) < 1e-6 or abs(rspan) < 1e-6 or lspan * rspan >= 0.0:
+            return raw
+        # Select the physical Left or Right half by which side of centre the raw
+        # sample occupies. This works whether Left is electrically low or high.
+        if (raw - centre) * lspan >= 0.0:
+            value = -((raw - centre) / lspan)
+        else:
+            value = (raw - centre) / rspan
+        return max(-1.0, min(1.0, float(value)))
 
     def _ctrl_connected(self):
         now = time.time()
@@ -658,8 +701,25 @@ class HVP2PBackend(QObject):
             self._send_velocity(0.0, force=True)
             return
 
-        axis = self._ctrl_axis * (-1 if self.reverse_joystick else 1)
+        # Moving the stick is required by the calibration wizard. Never allow
+        # those movements to command the winch while the overlay is open.
+        if self.joystick_calibration_open:
+            self.goto_target_m = None
+            self._send_velocity(0.0, force=abs(self.last_sent_vel) > .0001)
+            return
+
+        axis = self._calibrated_joystick(self._ctrl_axis) * (-1 if self.reverse_joystick else 1)
         deadband = max(0.0, min(25.0, float(self.joystick_deadband_pct)))
+        if self._joystick_neutral_required:
+            # A zero-percent operating deadband is valid, but the post-wizard
+            # release interlock still needs a small practical neutral window so
+            # ADC/joystick noise cannot latch motion off forever.
+            neutral_band = max(1.0, deadband)
+            if abs(axis*100) <= neutral_band:
+                self._joystick_neutral_required = False
+            self.goto_target_m = None
+            self._send_velocity(0.0, force=abs(self.last_sent_vel) > .0001)
+            return
         if abs(axis*100) < deadband:
             axis = 0.0
         if self.goto_target_m is not None and abs(axis*100) >= deadband:
@@ -1155,6 +1215,11 @@ class HVP2PBackend(QObject):
             "reverse_joystick": bool(self.reverse_joystick),
             "reverse_motor": bool(self.reverse_motor),
             "joystick_deadband_pct": float(self.joystick_deadband_pct),
+            "joystick_calibration": {
+                "left": float(self.joystick_cal_left),
+                "centre": float(self.joystick_cal_centre),
+                "right": float(self.joystick_cal_right),
+            },
             "position_source": str(self.position_source),
             "units_per_m": float(self.winch_units_per_m),
             "drive_modes": [dict(x) for x in self.drive_modes],
@@ -1171,6 +1236,15 @@ class HVP2PBackend(QObject):
         self.reverse_joystick = bool(snap.get("reverse_joystick", self.reverse_joystick))
         self.reverse_motor = bool(snap.get("reverse_motor", self.reverse_motor))
         self.joystick_deadband_pct = max(0.0, min(25.0, float(snap.get("joystick_deadband_pct", self.joystick_deadband_pct))))
+        joy_cal = snap.get("joystick_calibration", {}) if isinstance(snap.get("joystick_calibration", {}), dict) else {}
+        try:
+            left = float(joy_cal.get("left", self.joystick_cal_left))
+            centre = float(joy_cal.get("centre", self.joystick_cal_centre))
+            right = float(joy_cal.get("right", self.joystick_cal_right))
+            if abs(left-centre) >= 0.05 and abs(right-centre) >= 0.05 and (left-centre)*(right-centre) < 0.0:
+                self.joystick_cal_left, self.joystick_cal_centre, self.joystick_cal_right = left, centre, right
+        except Exception:
+            pass
         self.position_source = "Encoder"
         self.winch_units_per_m = max(1.0, float(snap.get("units_per_m", self.winch_units_per_m)))
         self.drive_modes = self._normalise_drive_modes(snap.get("drive_modes", self.drive_modes))
@@ -1200,6 +1274,15 @@ class HVP2PBackend(QObject):
             self.reverse_joystick = bool(c.get("reverse_joystick", self.reverse_joystick))
             self.reverse_motor = bool(c.get("reverse_motor", self.reverse_motor))
             self.joystick_deadband_pct = max(0.0, min(25.0, float(c.get("joystick_deadband_pct", self.joystick_deadband_pct))))
+            joy_cal = c.get("joystick_calibration", {}) if isinstance(c.get("joystick_calibration", {}), dict) else {}
+            try:
+                left = float(joy_cal.get("left", self.joystick_cal_left))
+                centre = float(joy_cal.get("centre", self.joystick_cal_centre))
+                right = float(joy_cal.get("right", self.joystick_cal_right))
+                if abs(left-centre) >= 0.05 and abs(right-centre) >= 0.05 and (left-centre)*(right-centre) < 0.0:
+                    self.joystick_cal_left, self.joystick_cal_centre, self.joystick_cal_right = left, centre, right
+            except Exception:
+                pass
             # Encoder is the currently proven position source. Persist the field
             # for the locked Setup control without inventing an unverified source.
             self.position_source = "Encoder"
@@ -1309,6 +1392,11 @@ class HVP2PBackend(QObject):
                 "reverse_joystick": self.reverse_joystick,
                 "reverse_motor": self.reverse_motor,
                 "joystick_deadband_pct": self.joystick_deadband_pct,
+                "joystick_calibration": {
+                    "left": self.joystick_cal_left,
+                    "centre": self.joystick_cal_centre,
+                    "right": self.joystick_cal_right,
+                },
                 "position_source": self.position_source,
                 "ctrl_aux_assignments": self.ctrl_aux_assignments,
                 "w1p_aux_assignments": self.w1p_aux_assignments,
@@ -1379,7 +1467,9 @@ class HVP2PBackend(QObject):
     @Property(bool, notify=stateChanged)
     def rs485Connected(self): return bool(self.w1p.connected and self.winch_rs_status == "Connected")
     @Property(float, notify=stateChanged)
-    def joystickValue(self): return float(self._ctrl_axis)
+    def joystickValue(self): return float(self._calibrated_joystick(self._ctrl_axis))
+    @Property(float, notify=stateChanged)
+    def joystickRawValue(self): return float(self._ctrl_axis)
     @Property(bool, notify=stateChanged)
     def systemReady(self): return not self.state.estop_active
     @Property(str, notify=stateChanged)
@@ -1613,6 +1703,21 @@ class HVP2PBackend(QObject):
     def calibrationOpen(self): return self.calibration_open
     @Property(str, notify=calibrationChanged)
     def calibrationTitle(self): return self.calibration_title
+    @Property(bool, notify=joystickCalibrationChanged)
+    def joystickCalibrationOpen(self): return bool(self.joystick_calibration_open)
+    @Property(int, notify=joystickCalibrationChanged)
+    def joystickCalibrationStep(self): return int(self.joystick_calibration_step)
+    @Property(str, notify=joystickCalibrationChanged)
+    def joystickCalibrationTitle(self): return str(self.joystick_calibration_title)
+    @Property(str, notify=joystickCalibrationChanged)
+    def joystickCalibrationError(self): return str(self.joystick_calibration_error)
+    @Property('QVariantMap', notify=joystickCalibrationChanged)
+    def joystickCalibrationCaptures(self):
+        return {
+            "left": "—" if self._joystick_cal_pending.get("left") is None else f"{float(self._joystick_cal_pending['left']):.4f}",
+            "centre": "—" if self._joystick_cal_pending.get("centre") is None else f"{float(self._joystick_cal_pending['centre']):.4f}",
+            "right": "—" if self._joystick_cal_pending.get("right") is None else f"{float(self._joystick_cal_pending['right']):.4f}",
+        }
     @Property(str, notify=stateChanged)
     def srvrTime(self): return time.strftime("%Y-%m-%d  %H:%M:%S")
     @Property(str, notify=stateChanged)
@@ -2004,10 +2109,76 @@ class HVP2PBackend(QObject):
 
     @Slot()
     def openJoystickCalibration(self):
-        # The final Setup design exposes this action, but the supplied working
-        # backend has no separate joystick-calibration protocol/wizard to invoke.
-        # Keep the control non-destructive rather than inventing hardware logic.
-        self._log("[Calibration] Joystick calibration requested")
+        # The joystick must be moved to both endpoints, so hold winch output at
+        # zero for the complete wizard and capture raw CTRL values only.
+        self.calibration_open = False
+        # If another service calibration was open programmatically, immediately
+        # restore the W1P service-mode state before starting joystick capture.
+        # Joystick calibration itself never enables service movement.
+        self._sync_service_mode_to_winch(force=True)
+        self.joystick_calibration_open = True
+        self._joystick_neutral_required = True
+        self.joystick_calibration_step = 0
+        self.joystick_calibration_title = "Set Joystick Left"
+        self.joystick_calibration_error = ""
+        self._joystick_cal_pending = {"left": None, "centre": None, "right": None}
+        self.goto_target_m = None
+        self._send_velocity(0.0, force=True)
+        self._log("[Calibration] Joystick calibration started")
+        self.joystickCalibrationChanged.emit(); self.calibrationChanged.emit(); self.stateChanged.emit()
+
+    @Slot()
+    def cancelJoystickCalibration(self):
+        self.joystick_calibration_open = False
+        self.joystick_calibration_error = ""
+        self.goto_target_m = None
+        self._send_velocity(0.0, force=True)
+        self._log("[Calibration] Joystick calibration cancelled")
+        self.joystickCalibrationChanged.emit(); self.stateChanged.emit()
+
+    @Slot()
+    def joystickCalibrationBack(self):
+        if self.joystick_calibration_step > 0:
+            self.joystick_calibration_step -= 1
+        self.joystick_calibration_title = (
+            "Set Joystick Left", "Set Joystick Centre", "Set Joystick Right"
+        )[self.joystick_calibration_step]
+        self.joystick_calibration_error = ""
+        self.joystickCalibrationChanged.emit()
+
+    @Slot()
+    def joystickCalibrationNext(self):
+        raw = max(-1.0, min(1.0, float(self._ctrl_axis)))
+        if self.joystick_calibration_step == 0:
+            self._joystick_cal_pending["left"] = raw
+            self.joystick_calibration_step = 1
+            self.joystick_calibration_title = "Set Joystick Centre"
+        elif self.joystick_calibration_step == 1:
+            self._joystick_cal_pending["centre"] = raw
+            self.joystick_calibration_step = 2
+            self.joystick_calibration_title = "Set Joystick Right"
+        else:
+            self._joystick_cal_pending["right"] = raw
+            left = float(self._joystick_cal_pending["left"])
+            centre = float(self._joystick_cal_pending["centre"])
+            right = float(self._joystick_cal_pending["right"])
+            lspan, rspan = left-centre, right-centre
+            if abs(lspan) < 0.05 or abs(rspan) < 0.05 or lspan*rspan >= 0.0:
+                self.joystick_calibration_error = "Invalid calibration range. Left and Right must be on opposite sides of Centre."
+                self._log("[Calibration] Joystick calibration rejected: invalid Left/Centre/Right range")
+                self.joystickCalibrationChanged.emit(); self.stateChanged.emit()
+                return
+            self.joystick_cal_left = left
+            self.joystick_cal_centre = centre
+            self.joystick_cal_right = right
+            self.joystick_calibration_error = ""
+            self.joystick_calibration_open = False
+            self._save_config()
+            self._saved_setup_snapshot = self._setup_snapshot()
+            self._log(f"[Calibration] Joystick calibrated L={left:.4f} C={centre:.4f} R={right:.4f}")
+        self.goto_target_m = None
+        self._send_velocity(0.0, force=True)
+        self.joystickCalibrationChanged.emit(); self.configChanged.emit(); self.stateChanged.emit()
 
     @Slot(str,bool)
     def setFreeDEnabled(self, which, enabled):

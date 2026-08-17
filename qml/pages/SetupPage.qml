@@ -8,7 +8,7 @@ Item {
     property real scaleFactor: 1.0
     property color fg: "#f0f2f1"
     property color muted: "#aeb4b1"
-    property color cyan: "#58d5f5"
+    property color cyan: "#26d5ff"
     property color green: "#63d84e"
     property color line: "#3b4246"
     function f(v) { return Math.max(1, v * scaleFactor) }
@@ -59,7 +59,7 @@ Item {
                             Text { anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; text:"LEFT"; color:root.fg; font.pixelSize:root.f(11) }
                             Text { anchors.right:parent.right; anchors.verticalCenter:parent.verticalCenter; text:"RIGHT"; color:root.fg; font.pixelSize:root.f(11) }
                             Rectangle { id:joyTrack; anchors.horizontalCenter:parent.horizontalCenter; anchors.verticalCenter:parent.verticalCenter; width:parent.width-root.f(105); height:1; color:"#697074" }
-                            Rectangle { anchors.verticalCenter:parent.verticalCenter; x:joyTrack.x + (joyTrack.width-width)*Math.max(0,Math.min(1,(backend.joystickValue+1)/2)); width:root.f(13); height:root.f(13); radius:root.f(7); color:"#3ab7ec"; border.color:"#50646c"; border.width:root.f(5) }
+                            Rectangle { anchors.verticalCenter:parent.verticalCenter; x:joyTrack.x + (joyTrack.width-width)*Math.max(0,Math.min(1,(backend.joystickValue+1)/2)); width:root.f(13); height:root.f(13); radius:root.f(7); color:root.cyan; border.color:"#50646c"; border.width:root.f(5) }
                         }
                         Row { width:parent.width;height:root.f(25);Text{width:parent.width-root.f(60);anchors.verticalCenter:parent.verticalCenter;text:"Current Value";color:root.fg;font.pixelSize:root.f(11)}Text{width:root.f(60);anchors.verticalCenter:parent.verticalCenter;text:Number(backend.joystickValue).toFixed(2);horizontalAlignment:Text.AlignHCenter;color:root.fg;font.pixelSize:root.f(12)} }
                         Row {
@@ -166,7 +166,7 @@ Item {
                     height: parent.height
                     Column {
                         anchors.fill:parent; anchors.margins:root.f(18); spacing:root.f(58)
-                        Text { text:"ϟ  ACTIONS"; color:root.fg; font.pixelSize:root.f(17); font.weight:Font.Medium }
+                        Text { text:"ϟ  ACTIONS"; color:root.cyan; font.pixelSize:root.f(17); font.weight:Font.Medium }
                         HVButton { anchors.horizontalCenter:parent.horizontalCenter; width:parent.width-root.f(48); height:root.f(50); text:"⇩   SAVE CONFIG"; accent:root.cyan; onClicked:backend.saveConfig() }
                         HVButton { anchors.horizontalCenter:parent.horizontalCenter; width:parent.width-root.f(48); height:root.f(50); text:"⇧   LOAD CONFIG"; accent:root.cyan; onClicked:backend.loadConfig() }
                     }

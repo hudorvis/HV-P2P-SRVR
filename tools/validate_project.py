@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.12"
+VERSION = "26.08.17.13"
 ERRORS: list[str] = []
 
 
@@ -236,9 +236,9 @@ require('onCableProfileChanged: canvas.requestPaint()' in span_qml and
         'onCurrentPositionChanged: canvas.requestPaint()' in span_qml,
         "SpanDiagram property-driven repaint hooks are missing")
 
-# Final locked Setup / Log integration contract. Run and Free-D remain in Main.qml
-# and are guarded separately above; Setup/Log are isolated components so their
-# integration cannot accidentally rewrite those locked bodies.
+# Final Setup / Log integration contract. Run and Free-D remain in Main.qml;
+# all four pages are guarded below for the v13 colour/clipping deltas while the
+# locked panel geometry and functional structure stay unchanged.
 require('import "pages"' in qml_main and 'SetupPage {' in qml_main and 'LogPage {' in qml_main,
         "final Setup/Log page components are not integrated into the shared shell")
 require("functional interim visual" not in qml_main and "final Setup visual design has not yet been locked" not in qml_main,
@@ -265,6 +265,92 @@ for token in (
     require(token in backend, f"final Setup/Log backend surface missing: {token}")
 require('pyside6-qmllint --max-warnings -1 qml/Main.qml qml/components/*.qml qml/pages/*.qml' in workflow,
         "CI qmllint does not include final Setup/Log pages")
+
+# v13 requested style-unification and clipping contract. The blue accent is the
+# single Main Heading / Sub Heading colour across Run, Setup, Free-D and Log.
+# Green remains reserved for positive/selected operational state and live values.
+require('property color blue: "#26d5ff"' in qml_main,
+        "shared heading blue is missing or changed")
+require('cyan:window.blue' in qml_main and qml_main.count('cyan:window.blue') >= 2,
+        "Setup and Log are not both using the shared shell heading blue")
+require('#58d5f5' not in ''.join(p.read_text(encoding="utf-8") for p in (ROOT / "qml").rglob("*.qml")),
+        "stale alternate cyan remains in QML")
+for token in ('⚙  DRIVE', '◴  SPEED', '⌖  POSITION', '▱  SHORTCUTS'):
+    require(re.search(r'text\s*:\s*"' + re.escape(token) + r'"\s*;\s*color\s*:\s*blue', qml_main) is not None,
+            f"Run heading is not shared blue: {token}")
+require('accent:blue; onClicked:window.changeShortcutTab(index)' in qml_main,
+        "Run Shortcuts active-tab accent is not shared blue")
+require('backend.calibrationType==="Winch"?"Winch Calibration":"Limit Calibration";color:blue' in qml_main and
+        'text:backend.calibrationTitle;color:blue' in qml_main,
+        "existing Limit/Winch calibration popup headings are not shared blue")
+for token in ('FREE-D INPUT', 'FREE-D OUTPUT', 'GEOMETRY', 'LENS CALIBRATION',
+              'Cable Geometry Points', 'Weights & Tension', 'LIVE LENS VALUES',
+              'ZOOM (Wide ↔ Tele)', 'FOCUS (Near ↔ Far)'):
+    require(re.search(r'text\s*:\s*"' + re.escape(token) + r'"[^}]{0,180}?color\s*:\s*blue', qml_main) is not None,
+            f"Free-D heading/subheading is not shared blue: {token}")
+for token in ('⌘  CTRL', 'JOYSTICK CALIBRATION', '♨  W1P', '〽  MOTION PROFILES',
+              'MODE 1', 'MODE 2', 'DRIVE BEHAVIOUR', 'ϟ  ACTIONS',
+              '♧  CTRL-TS AUX ASSIGN', '♧  W1P-TS AUX ASSIGN', '⌾  CALIBRATION'):
+    require(re.search(r'text\s*:\s*"' + re.escape(token) + r'"[^}]{0,180}?color\s*:\s*root\.cyan', qml_setup) is not None,
+            f"Setup heading/subheading is not shared blue: {token}")
+for token in ('▤  LOG VIEW', '♢  SEVERITY', '⌕  SEARCH', 'ϟ  ACTIONS',
+              '〽  LIVE LOG', '▣  SYSTEM SUMMARY'):
+    require(re.search(r'text\s*:\s*"' + re.escape(token) + r'"[^}]{0,180}?color\s*:\s*root\.cyan', qml_log) is not None,
+            f"Log heading is not shared blue: {token}")
+require('property color headingColor: "#26d5ff"' in span_qml and
+        'property color subheadingColor: headingColor' in span_qml and
+        re.search(r'text\s*:\s*root\.title\s*\n\s*color\s*:\s*root\.headingColor', span_qml) is not None and
+        re.search(r'text\s*:\s*root\.subtitle\s*\n\s*color\s*:\s*root\.subheadingColor', span_qml) is not None,
+        "shared Run/Free-D diagram heading palette is not blue")
+
+# Screenshot-derived clipping fixes must remain mathematically contained without
+# changing any locked panel allocation.
+require('width:f(54); height:parent.height; text:"Mode 1"; font.pixelSize:f(11)' in qml_main and
+        'width:f(54); height:parent.height; text:"Mode 2"; font.pixelSize:f(11)' in qml_main and
+        qml_main.count('width:(parent.width-f(150+54+54+16))/2') >= 2 and
+        qml_main.count('leftPadding:f(4); rightPadding:f(4)') >= 2,
+        "Run System Drive Mode row clipping fix is missing")
+require('width:parent.width*.22' in qml_main and
+        qml_main.count('width:parent.width*.22') >= 3,
+        "Free-D Parameter column clipping fix is missing")
+require(qml_main.count('width:f(72)') >= 2 and 'parent.width-f(48+72+66)' in qml_main,
+        "Free-D lens decoded percentage width fix is missing")
+
+# Joystick calibration is a real three-step wizard, not a no-op button. It must
+# capture raw Left/Centre/Right values, persist them, and fail-safe motion to zero
+# for the entire capture process.
+for token in ('Set Joystick Left', 'Set Joystick Centre', 'Set Joystick Right'):
+    require(token in backend, f"joystick wizard step missing from backend: {token}")
+require('text:backend.joystickCalibrationTitle' in qml_main and
+        'model: ["Set Left", "Set Centre", "Set Right"]' in qml_main,
+        "joystick wizard does not display the Left/Centre/Right sequence")
+for token in ('backend.joystickCalibrationOpen', 'backend.joystickCalibrationStep',
+              'backend.joystickCalibrationTitle', 'backend.joystickCalibrationError',
+              'backend.joystickCalibrationCaptures', 'backend.joystickRawValue',
+              'backend.cancelJoystickCalibration()', 'backend.joystickCalibrationBack()',
+              'backend.joystickCalibrationNext()'):
+    require(token in qml_main, f"joystick wizard QML binding missing: {token}")
+for token in ('def _calibrated_joystick', 'def openJoystickCalibration',
+              'def cancelJoystickCalibration', 'def joystickCalibrationBack',
+              'def joystickCalibrationNext', '"joystick_calibration"'):
+    require(token in backend, f"joystick wizard backend implementation missing: {token}")
+require('if self.joystick_calibration_open:' in backend and
+        '_send_velocity(0.0' in backend[backend.find('if self.joystick_calibration_open:'):backend.find('axis = self._calibrated_joystick')],
+        "joystick calibration does not fail-safe winch output to zero")
+require('self._joystick_neutral_required = True' in backend and
+        'if self._joystick_neutral_required:' in backend and
+        'neutral_band = max(1.0, deadband)' in backend and
+        'self._joystick_neutral_required = False' in backend,
+        "post-calibration joystick neutral-return motion interlock is missing")
+require('remains inhibited until the joystick is returned to centre' in qml_main,
+        "joystick wizard does not explain the neutral-return safety interlock")
+require('width: f(720)\n            height: f(540)' in qml_main and
+        'height: f(225)\n                    spacing: f(12)' in qml_main,
+        "joystick wizard vertical geometry can clip its content")
+require('abs(lspan) < 0.05' in backend and 'lspan*rspan >= 0.0' in backend,
+        "joystick calibration range validation missing")
+require('self._sync_service_mode_to_winch(force=True)' in backend[backend.find('def openJoystickCalibration'):backend.find('def cancelJoystickCalibration')],
+        "joystick wizard does not close an inherited service-calibration state safely")
 
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.
@@ -332,6 +418,8 @@ print("  Python syntax: OK")
 print("  Qt Quick only / no Tkinter: OK")
 print("  QML/backend interface: OK")
 print("  QRC/project manifest: OK")
+print("  Four-page heading/style contract + clipping guards: OK")
+print("  Joystick calibration wizard + neutral-return safety interlock: OK")
 print("  Run 20/25/25/30 geometry: OK")
 print("  Proven W1P/CTRL critical command contract: OK")
 print("  Isolated deployment staging + smoke checks: OK")

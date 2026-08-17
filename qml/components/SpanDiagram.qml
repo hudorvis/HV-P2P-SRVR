@@ -26,6 +26,8 @@ Item {
     property real nearRamp: 0
     property real farRamp: 0
     property color accent: "#72ed21"
+    property color headingColor: "#26d5ff"
+    property color subheadingColor: headingColor
 
     // Repaint from the component's own bound properties instead of reaching
     // out to the Python context property from inside this reusable component.
@@ -49,7 +51,7 @@ Item {
     Text {
         x: 26; y: 14
         text: root.title
-        color: "#f4f5f4"
+        color: root.headingColor
         font.family: "Helvetica Neue"
         font.pixelSize: 20
         font.weight: Font.Medium
@@ -57,7 +59,7 @@ Item {
     Text {
         x: 137; y: 18
         text: root.subtitle
-        color: "#b7bcba"
+        color: root.subheadingColor
         font.family: "Helvetica Neue"
         font.pixelSize: 14
     }

@@ -31,7 +31,7 @@ import PySide6.QtQuickControls2  # noqa: F401
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.12"
+APP_VERSION = "26.08.17.13"
 
 
 def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: HVP2PBackend) -> bool:
@@ -63,6 +63,24 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         app.processEvents()
         backend.cancelCalibration()
         app.processEvents()
+
+        # Exercise the three-step Joystick Calibration popup and corrected axis.
+        backend.openJoystickCalibration()
+        app.processEvents()
+        backend._ctrl_axis = -0.82
+        backend.joystickCalibrationNext()
+        app.processEvents()
+        backend._ctrl_axis = 0.08
+        backend.joystickCalibrationNext()
+        app.processEvents()
+        backend._ctrl_axis = 0.91
+        backend.joystickCalibrationNext()
+        app.processEvents()
+        if backend.joystickCalibrationOpen:
+            raise RuntimeError("Joystick Calibration wizard did not complete")
+        backend._ctrl_axis = 0.08
+        if abs(float(backend.joystickValue)) > 1e-6:
+            raise RuntimeError("Joystick calibrated centre is not zero")
 
         # Exercise the editable Run/System controls that previously appeared
         # visually correct but behaved read-only in the first Qt test builds.

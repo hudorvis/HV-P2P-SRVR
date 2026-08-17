@@ -21,6 +21,7 @@ ApplicationWindow {
     property color fg: "#f0f2f1"
     property color muted: "#aeb4b1"
     property color green: "#63d84e"
+    property color blue: "#26d5ff"
     property color lime: "#72ed21"
     property color red: "#ef5757"
     property int page: 0
@@ -126,7 +127,7 @@ ApplicationWindow {
                                 width:parent.parent.avail*0.20; height:parent.height
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(20); spacing:f(10)
-                                    Text { text:"⚙  DRIVE"; color:lime; font.pixelSize:f(19); font.weight:Font.Medium }
+                                    Text { text:"⚙  DRIVE"; color:blue; font.pixelSize:f(19); font.weight:Font.Medium }
                                     Item { width:parent.width; height:f(45); Text{anchors.left:parent.left;anchors.verticalCenter:parent.verticalCenter;text:"Drive Mode";color:fg;font.pixelSize:f(14)} Text{anchors.right:parent.right;anchors.verticalCenter:parent.verticalCenter;text:backend.driveModeName;color:fg;font.pixelSize:f(15)} Rectangle{anchors.bottom:parent.bottom;width:parent.width;height:1;color:"#31383b"} }
                                     Item { width:parent.width; height:f(45); Text{anchors.left:parent.left;anchors.verticalCenter:parent.verticalCenter;text:"Acceleration Mode";color:fg;font.pixelSize:f(14)} Text{anchors.right:parent.right;anchors.verticalCenter:parent.verticalCenter;text:backend.accelerationMode;color:fg;font.pixelSize:f(15)} Rectangle{anchors.bottom:parent.bottom;width:parent.width;height:1;color:"#31383b"} }
                                     Item { width:parent.width; height:f(45); Text{anchors.left:parent.left;anchors.verticalCenter:parent.verticalCenter;text:"Battery Change Mode";color:fg;font.pixelSize:f(14)} Text{anchors.right:parent.right;anchors.verticalCenter:parent.verticalCenter;text:backend.batteryChange?"On":"Off";color:fg;font.pixelSize:f(15)} }
@@ -137,7 +138,7 @@ ApplicationWindow {
                                 width:parent.parent.avail*0.25; height:parent.height
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(20); spacing:f(14)
-                                    Text { text:"◴  SPEED"; color:lime; font.pixelSize:f(19); font.weight:Font.Medium }
+                                    Text { text:"◴  SPEED"; color:blue; font.pixelSize:f(19); font.weight:Font.Medium }
                                     Row {
                                         width:parent.width; height:f(150)
                                         Item { width:parent.width/2; height:parent.height; Text{x:0;y:f(9);text:"CURRENT SPEED";color:muted;font.pixelSize:f(12)} Text{x:0;y:f(48);text:Number(backend.currentSpeed).toFixed(1);color:fg;font.pixelSize:f(31)} Text{x:f(79);y:f(62);text:"m/s";color:muted;font.pixelSize:f(14)} Text{x:0;y:f(112);text:Number(backend.currentSpeed*3.6).toFixed(1);color:lime;font.pixelSize:f(20)} Text{x:f(69);y:f(117);text:"km/h";color:muted;font.pixelSize:f(13)} }
@@ -151,7 +152,7 @@ ApplicationWindow {
                                 width:parent.parent.avail*0.25; height:parent.height
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(20); spacing:f(12)
-                                    Text { text:"⌖  POSITION"; color:lime; font.pixelSize:f(19); font.weight:Font.Medium }
+                                    Text { text:"⌖  POSITION"; color:blue; font.pixelSize:f(19); font.weight:Font.Medium }
                                     Text { width:parent.width; text:"CURRENT POSITION"; color:muted; font.pixelSize:f(12); horizontalAlignment:Text.AlignHCenter }
                                     Row { anchors.horizontalCenter:parent.horizontalCenter; spacing:f(8); Text{text:Number(backend.position).toFixed(2);color:fg;font.pixelSize:f(31)} Text{text:"m";color:muted;font.pixelSize:f(14);anchors.baseline:parent.children[0].baseline} }
                                     Rectangle { width:parent.width; height:1; color:"#32383c" }
@@ -165,11 +166,11 @@ ApplicationWindow {
                                     anchors.fill:parent; anchors.margins:f(10); spacing:f(3)
                                     Item {
                                         width:parent.width; height:f(27)
-                                        Text { anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; text:"▱  SHORTCUTS"; color:lime; font.pixelSize:f(18); font.weight:Font.Medium }
+                                        Text { anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; text:"▱  SHORTCUTS"; color:blue; font.pixelSize:f(18); font.weight:Font.Medium }
                                     }
                                     Row {
                                         width:parent.width; height:f(27); spacing:f(4)
-                                        Repeater { model:["Preset 1-5","Preset 6-10","Limits","System"]; HVTab { width:(parent.width-f(12))/4; height:parent.height; text:modelData; selected:window.shortcutTab===index; onClicked:window.changeShortcutTab(index) } }
+                                        Repeater { model:["Preset 1-5","Preset 6-10","Limits","System"]; HVTab { width:(parent.width-f(12))/4; height:parent.height; text:modelData; selected:window.shortcutTab===index; accent:blue; onClicked:window.changeShortcutTab(index) } }
                                     }
                                     Rectangle { width:parent.width; height:1; color:"#343a3e" }
 
@@ -231,10 +232,10 @@ ApplicationWindow {
                                             height: f(32)
                                             spacing: f(4)
                                             Text { width:f(150); anchors.verticalCenter:parent.verticalCenter; text:"Drive Mode"; color:fg; font.pixelSize:f(13) }
-                                            HVButton { width:f(60); height:parent.height; text:"Mode 1"; selected:backend.activeDriveMode===0; onClicked:backend.setDriveMode(0) }
-                                            HVField { width:(parent.width-f(150+60+60+12))/2; height:parent.height; bindModel:true; modelText:backend.driveMode1Name; onCommit:function(v){backend.renameDriveMode(0,v)} }
-                                            HVButton { width:f(60); height:parent.height; text:"Mode 2"; selected:backend.activeDriveMode===1; onClicked:backend.setDriveMode(1) }
-                                            HVField { width:(parent.width-f(150+60+60+12))/2; height:parent.height; bindModel:true; modelText:backend.driveMode2Name; onCommit:function(v){backend.renameDriveMode(1,v)} }
+                                            HVButton { width:f(54); height:parent.height; text:"Mode 1"; font.pixelSize:f(11); selected:backend.activeDriveMode===0; onClicked:backend.setDriveMode(0) }
+                                            HVField { width:(parent.width-f(150+54+54+16))/2; height:parent.height; bindModel:true; modelText:backend.driveMode1Name; font.pixelSize:f(11); leftPadding:f(4); rightPadding:f(4); onCommit:function(v){backend.renameDriveMode(0,v)} }
+                                            HVButton { width:f(54); height:parent.height; text:"Mode 2"; font.pixelSize:f(11); selected:backend.activeDriveMode===1; onClicked:backend.setDriveMode(1) }
+                                            HVField { width:(parent.width-f(150+54+54+16))/2; height:parent.height; bindModel:true; modelText:backend.driveMode2Name; font.pixelSize:f(11); leftPadding:f(4); rightPadding:f(4); onCommit:function(v){backend.renameDriveMode(1,v)} }
                                         }
                                         Row { width:parent.width;height:f(32);spacing:f(7);Text{width:f(150);anchors.verticalCenter:parent.verticalCenter;text:"Calibration Mode";color:fg;font.pixelSize:f(13)}HVButton{width:(parent.width-f(157))/2;height:parent.height;text:"Limit Calibration";onClicked:backend.openLimitCalibration()}HVButton{width:(parent.width-f(157))/2;height:parent.height;text:"Winch Calibration";onClicked:backend.openWinchCalibration()} }
                                     }
@@ -254,6 +255,7 @@ ApplicationWindow {
                     fg:window.fg
                     muted:window.muted
                     green:window.green
+                    cyan:window.blue
                 }
             }
 
@@ -273,7 +275,7 @@ ApplicationWindow {
                                 width:parent.cardWidth; height:parent.height
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(12); spacing:f(6)
-                                    Text { width:parent.width; text:"FREE-D INPUT"; horizontalAlignment:Text.AlignHCenter; color:fg; font.pixelSize:f(18) }
+                                    Text { width:parent.width; text:"FREE-D INPUT"; horizontalAlignment:Text.AlignHCenter; color:blue; font.pixelSize:f(18) }
                                     Row {
                                         width:parent.width; height:f(31); spacing:f(5)
                                         Text{width:f(44);anchors.verticalCenter:parent.verticalCenter;text:"Input:";color:fg;font.pixelSize:f(12)}
@@ -283,7 +285,7 @@ ApplicationWindow {
                                         Text{width:f(31);anchors.verticalCenter:parent.verticalCenter;text:"Port:";color:fg;font.pixelSize:f(11)}
                                         HVField{width:f(54);height:parent.height;bindModel:true;modelText:String(backend.freeDInputPort);font.pixelSize:f(12);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setFreeDNetwork("Input","Port",v)}}
                                     }
-                                    Row { width:parent.width;height:f(22);spacing:0;HVReadout{width:parent.width*.18;height:parent.height;text:"Parameter";textColor:muted;horizontalAlignment:Text.AlignLeft}HVReadout{width:parent.width*.20;height:parent.height;text:"Raw";textColor:muted}HVReadout{width:parent.width*.25;height:parent.height;text:"Decoded";textColor:muted}HVReadout{width:parent.width*.23;height:parent.height;text:"Offset";textColor:muted}HVReadout{width:parent.width*.14;height:parent.height;text:"Invert";textColor:muted} }
+                                    Row { width:parent.width;height:f(22);spacing:0;HVReadout{width:parent.width*.22;height:parent.height;text:"Parameter";textColor:muted;horizontalAlignment:Text.AlignLeft}HVReadout{width:parent.width*.18;height:parent.height;text:"Raw";textColor:muted}HVReadout{width:parent.width*.25;height:parent.height;text:"Decoded";textColor:muted}HVReadout{width:parent.width*.21;height:parent.height;text:"Offset";textColor:muted}HVReadout{width:parent.width*.14;height:parent.height;text:"Invert";textColor:muted} }
                                     Repeater {
                                         model:["Cam ID","Pan","Tilt","Roll","Zoom","Focus","FPS"]
                                         delegate:Row {
@@ -293,10 +295,10 @@ ApplicationWindow {
                                             property bool hasInvert:["Pan","Tilt","Roll","Zoom","Focus"].indexOf(modelData)>=0
                                             property string rawText:modelData==="Cam ID"?String(fd.cam):modelData==="Pan"?String(fd.panRaw):modelData==="Tilt"?String(fd.tiltRaw):modelData==="Roll"?String(fd.rollRaw):modelData==="Zoom"?String(fd.zoomRaw):modelData==="Focus"?String(fd.focusRaw):Number(fd.fps).toFixed(3)
                                             property string decodedText:modelData==="Cam ID"?Number(fd.cam).toFixed(4):modelData==="Pan"?Number(fd.pan).toFixed(3)+"°":modelData==="Tilt"?Number(fd.tilt).toFixed(3)+"°":modelData==="Roll"?Number(fd.roll).toFixed(3)+"°":modelData==="Zoom"?Number(fd.zoom).toFixed(0):modelData==="Focus"?Number(fd.focus).toFixed(0):Number(fd.fps).toFixed(3)
-                                            HVReadout{width:parent.width*.18;height:parent.height;text:modelData;horizontalAlignment:Text.AlignLeft}
-                                            HVReadout{width:parent.width*.20;height:parent.height;text:parent.rawText}
+                                            HVReadout{width:parent.width*.22;height:parent.height;text:modelData;horizontalAlignment:Text.AlignLeft}
+                                            HVReadout{width:parent.width*.18;height:parent.height;text:parent.rawText}
                                             HVReadout{width:parent.width*.25;height:parent.height;text:parent.decodedText}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;readOnly:!parent.hasOffset;modelText:parent.hasOffset?Number(backend.freeDInputOffsets[modelData]).toFixed(3):"—";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.hasOffset){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Input",modelData,n)}}}
+                                            HVField{width:parent.width*.21;height:parent.height;bindModel:true;readOnly:!parent.hasOffset;modelText:parent.hasOffset?Number(backend.freeDInputOffsets[modelData]).toFixed(3):"—";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.hasOffset){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Input",modelData,n)}}}
                                             HVCheck{width:parent.width*.14;height:parent.height;interactive:parent.hasInvert;checked:parent.hasInvert?Boolean(backend.freeDInputInverts[modelData]):false;onToggled:function(v){if(parent.hasInvert)backend.setFreeDInvert("Input",modelData,v)}}
                                         }
                                     }
@@ -309,7 +311,7 @@ ApplicationWindow {
                                 width:parent.cardWidth; height:parent.height
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(12); spacing:f(6)
-                                    Text { width:parent.width; text:"FREE-D OUTPUT"; horizontalAlignment:Text.AlignHCenter; color:fg; font.pixelSize:f(18) }
+                                    Text { width:parent.width; text:"FREE-D OUTPUT"; horizontalAlignment:Text.AlignHCenter; color:blue; font.pixelSize:f(18) }
                                     Row {
                                         width:parent.width; height:f(31); spacing:f(5)
                                         Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Output:";color:fg;font.pixelSize:f(12)}
@@ -319,7 +321,7 @@ ApplicationWindow {
                                         Text{width:f(31);anchors.verticalCenter:parent.verticalCenter;text:"Port:";color:fg;font.pixelSize:f(11)}
                                         HVField{width:f(54);height:parent.height;bindModel:true;modelText:String(backend.freeDOutputPort);font.pixelSize:f(12);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setFreeDNetwork("Output","Port",v)}}
                                     }
-                                    Row { width:parent.width;height:f(22);spacing:0;HVReadout{width:parent.width*.18;height:parent.height;text:"Parameter";textColor:muted;horizontalAlignment:Text.AlignLeft}HVReadout{width:parent.width*.20;height:parent.height;text:"Raw";textColor:muted}HVReadout{width:parent.width*.25;height:parent.height;text:"Decoded";textColor:muted}HVReadout{width:parent.width*.23;height:parent.height;text:"Offset";textColor:muted}HVReadout{width:parent.width*.14;height:parent.height;text:"Invert";textColor:muted} }
+                                    Row { width:parent.width;height:f(22);spacing:0;HVReadout{width:parent.width*.22;height:parent.height;text:"Parameter";textColor:muted;horizontalAlignment:Text.AlignLeft}HVReadout{width:parent.width*.18;height:parent.height;text:"Raw";textColor:muted}HVReadout{width:parent.width*.25;height:parent.height;text:"Decoded";textColor:muted}HVReadout{width:parent.width*.21;height:parent.height;text:"Offset";textColor:muted}HVReadout{width:parent.width*.14;height:parent.height;text:"Invert";textColor:muted} }
                                     Repeater {
                                         model:["X","Y","Z","FPS"]
                                         delegate:Row {
@@ -327,10 +329,10 @@ ApplicationWindow {
                                             property var fd:backend.freeDOutput
                                             property bool axis:modelData!=="FPS"
                                             property real decoded:modelData==="X"?Number(fd.x):modelData==="Y"?Number(fd.y):modelData==="Z"?Number(fd.z):Number(fd.fps)
-                                            HVReadout{width:parent.width*.18;height:parent.height;text:modelData;horizontalAlignment:Text.AlignLeft}
-                                            HVField{width:parent.width*.20;height:parent.height;bindModel:true;readOnly:parent.axis;modelText:parent.axis?Number(parent.decoded*640).toFixed(0):Number(backend.freeDOutputRate).toFixed(3);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(!parent.axis)backend.setFreeDNetwork("Output","FPS",v)}}
+                                            HVReadout{width:parent.width*.22;height:parent.height;text:modelData;horizontalAlignment:Text.AlignLeft}
+                                            HVField{width:parent.width*.18;height:parent.height;bindModel:true;readOnly:parent.axis;modelText:parent.axis?Number(parent.decoded*640).toFixed(0):Number(backend.freeDOutputRate).toFixed(3);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(!parent.axis)backend.setFreeDNetwork("Output","FPS",v)}}
                                             HVReadout{width:parent.width*.25;height:parent.height;text:parent.axis?Number(parent.decoded).toFixed(3)+" m":Number(fd.fps).toFixed(3)}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;readOnly:!parent.axis;modelText:parent.axis?Number(backend.freeDOutputOffsets[modelData]).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.axis){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Output",modelData,n)}}}
+                                            HVField{width:parent.width*.21;height:parent.height;bindModel:true;readOnly:!parent.axis;modelText:parent.axis?Number(backend.freeDOutputOffsets[modelData]).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.axis){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Output",modelData,n)}}}
                                             HVCheck{width:parent.width*.14;height:parent.height;interactive:parent.axis;checked:parent.axis?Boolean(backend.freeDOutputInverts[modelData]):false;onToggled:function(v){if(parent.axis)backend.setFreeDInvert("Output",modelData,v)}}
                                         }
                                     }
@@ -343,8 +345,8 @@ ApplicationWindow {
                                 width:parent.cardWidth; height:parent.height
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(12); spacing:f(6)
-                                    Text { width:parent.width; text:"GEOMETRY"; horizontalAlignment:Text.AlignHCenter; color:fg; font.pixelSize:f(18) }
-                                    Text { text:"Cable Geometry Points"; color:fg; font.pixelSize:f(11) }
+                                    Text { width:parent.width; text:"GEOMETRY"; horizontalAlignment:Text.AlignHCenter; color:blue; font.pixelSize:f(18) }
+                                    Text { text:"Cable Geometry Points"; color:blue; font.pixelSize:f(11) }
                                     Row { width:parent.width;height:f(21);Text{width:parent.width*.31;text:"Point";color:muted;font.pixelSize:f(10)}Text{width:parent.width*.23;text:"X (m)";color:muted;font.pixelSize:f(10);horizontalAlignment:Text.AlignHCenter}Text{width:parent.width*.23;text:"Y (m)";color:muted;font.pixelSize:f(10);horizontalAlignment:Text.AlignHCenter}Text{width:parent.width*.23;text:"Z (m)";color:muted;font.pixelSize:f(10);horizontalAlignment:Text.AlignHCenter} }
                                     Repeater {
                                         model:5
@@ -410,7 +412,7 @@ ApplicationWindow {
                                             }
                                         }
                                     }
-                                    Text { text:"Weights & Tension"; color:fg; font.pixelSize:f(12); topPadding:f(4) }
+                                    Text { text:"Weights & Tension"; color:blue; font.pixelSize:f(12); topPadding:f(4) }
                                     Row {
                                         width: parent.width
                                         height: f(31)
@@ -504,18 +506,18 @@ ApplicationWindow {
                                 width:parent.cardWidth; height:parent.height
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(12); spacing:f(6)
-                                    Text { width:parent.width; text:"LENS CALIBRATION"; horizontalAlignment:Text.AlignHCenter; color:fg; font.pixelSize:f(18) }
+                                    Text { width:parent.width; text:"LENS CALIBRATION"; horizontalAlignment:Text.AlignHCenter; color:blue; font.pixelSize:f(18) }
                                     Row { width:parent.width;height:f(31);spacing:f(5);Text{width:f(64);anchors.verticalCenter:parent.verticalCenter;text:"Data Type:";color:fg;font.pixelSize:f(11)}HVCombo{width:(parent.width-f(143))/2;height:parent.height;model:["i16","u16","i24","u24"];currentIndex:window.indexOfValue(model,backend.lensType);onActivated:function(){backend.setLensType(currentText)}}Text{width:f(64);anchors.verticalCenter:parent.verticalCenter;text:"Data Scale:";color:fg;font.pixelSize:f(11)}HVCombo{width:(parent.width-f(143))/2;height:parent.height;model:["Auto","Manual","Full Scale"];currentIndex:window.indexOfValue(model,backend.lensScale);onActivated:function(){backend.setLensScale(currentText)}} }
-                                    Text { text:"LIVE LENS VALUES"; color:fg; font.pixelSize:f(11) }
+                                    Text { text:"LIVE LENS VALUES"; color:blue; font.pixelSize:f(11) }
                                     Row { width:parent.width;height:f(31);spacing:f(6);Text{width:f(50);anchors.verticalCenter:parent.verticalCenter;text:"Zoom:";color:fg;font.pixelSize:f(11)}HVReadout{width:(parent.width-f(112))/2;height:parent.height;text:Number(backend.freeDInput.zoom).toFixed(0)+" ("+Number(backend.freeDInput.zoomPct).toFixed(3)+"%)"}Text{width:f(50);anchors.verticalCenter:parent.verticalCenter;text:"Focus:";color:fg;font.pixelSize:f(11)}HVReadout{width:(parent.width-f(112))/2;height:parent.height;text:Number(backend.freeDInput.focus).toFixed(0)+" ("+Number(backend.freeDInput.focusPct).toFixed(3)+"%)"} }
                                     Rectangle { width:parent.width;height:1;color:"#343a3e" }
-                                    Text { text:"ZOOM (Wide ↔ Tele)"; color:fg; font.pixelSize:f(11) }
-                                    Row { width:parent.width;height:f(18);Text{width:f(48);text:"Position";color:muted;font.pixelSize:f(9)}Text{width:parent.width-f(48+58+66);text:"Raw Value";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter}Text{width:f(58);text:"Decoded";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter}Text{width:f(66);text:"Calibrate";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter} }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Wide";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+58+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.zoom_wide).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_wide",n)}}HVReadout{width:f(58);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_wide",backend.freeDInput.zoom)} }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Tele";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+58+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.zoom_tele).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_tele",n)}}HVReadout{width:f(58);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_tele",backend.freeDInput.zoom)} }
-                                    Text { text:"FOCUS (Near ↔ Far)"; color:fg; font.pixelSize:f(11) }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Near";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+58+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.focus_near).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_near",n)}}HVReadout{width:f(58);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_near",backend.freeDInput.focus)} }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Far";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+58+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.focus_far).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_far",n)}}HVReadout{width:f(58);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_far",backend.freeDInput.focus)} }
+                                    Text { text:"ZOOM (Wide ↔ Tele)"; color:blue; font.pixelSize:f(11) }
+                                    Row { width:parent.width;height:f(18);Text{width:f(48);text:"Position";color:muted;font.pixelSize:f(9)}Text{width:parent.width-f(48+72+66);text:"Raw Value";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter}Text{width:f(72);text:"Decoded";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter}Text{width:f(66);text:"Calibrate";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter} }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Wide";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.zoom_wide).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_wide",n)}}HVReadout{width:f(72);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_wide",backend.freeDInput.zoom)} }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Tele";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.zoom_tele).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_tele",n)}}HVReadout{width:f(72);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_tele",backend.freeDInput.zoom)} }
+                                    Text { text:"FOCUS (Near ↔ Far)"; color:blue; font.pixelSize:f(11) }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Near";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.focus_near).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_near",n)}}HVReadout{width:f(72);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_near",backend.freeDInput.focus)} }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Far";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.focus_far).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_far",n)}}HVReadout{width:f(72);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_far",backend.freeDInput.focus)} }
                                 }
                             }
                         }
@@ -541,6 +543,7 @@ ApplicationWindow {
                     fg:window.fg
                     muted:window.muted
                     green:window.green
+                    cyan:window.blue
                 }
             }
         }
@@ -568,7 +571,7 @@ ApplicationWindow {
             width:f(720); height:f(455); anchors.centerIn:parent
             Column {
                 anchors.fill:parent; anchors.margins:f(20); spacing:f(14)
-                Row { width:parent.width;height:f(32);Text{width:parent.width-f(35);text:backend.calibrationType==="Winch"?"Winch Calibration":"Limit Calibration";color:fg;font.pixelSize:f(22)}Text{width:f(35);text:"×";color:fg;font.pixelSize:f(26);horizontalAlignment:Text.AlignHCenter;MouseArea{anchors.fill:parent;cursorShape:Qt.PointingHandCursor;onClicked:backend.cancelCalibration()}} }
+                Row { width:parent.width;height:f(32);Text{width:parent.width-f(35);text:backend.calibrationType==="Winch"?"Winch Calibration":"Limit Calibration";color:blue;font.pixelSize:f(22)}Text{width:f(35);text:"×";color:fg;font.pixelSize:f(26);horizontalAlignment:Text.AlignHCenter;MouseArea{anchors.fill:parent;cursorShape:Qt.PointingHandCursor;onClicked:backend.cancelCalibration()}} }
                 Row {
                     width:parent.width;height:f(68);spacing:0
                     Repeater {
@@ -581,7 +584,7 @@ ApplicationWindow {
                     width:parent.width;height:f(190);spacing:f(24)
                     Item { width:parent.width*.42;height:parent.height;Canvas{anchors.fill:parent;onPaint:{var c=getContext("2d");c.reset();c.strokeStyle="#d8ddda";c.lineWidth=1;c.beginPath();c.moveTo(52,120);c.lineTo(65,48);c.lineTo(78,120);c.moveTo(45,120);c.lineTo(85,120);c.moveTo(52,90);c.lineTo(78,90);c.stroke();c.strokeRect(width-76,82,38,30);c.strokeRect(width-82,89,6,14);c.strokeRect(width-38,89,6,14);c.strokeStyle=green;c.setLineDash([5,4]);c.beginPath();c.moveTo(90,98);c.lineTo(width-90,98);c.stroke()}}Text{anchors.left:parent.left;anchors.bottom:parent.bottom;text:backend.calibrationStep===0?"NEAR\nLIMIT":backend.calibrationStep===1?"FAR\nLIMIT":"REF\nPOINT";color:fg;font.pixelSize:f(14);horizontalAlignment:Text.AlignHCenter}Text{anchors.right:parent.right;anchors.bottom:parent.bottom;text:"SKATE";color:fg;font.pixelSize:f(14)} }
                     Rectangle { width:1;height:parent.height;color:"#3a4144" }
-                    Column { width:parent.width*.53;height:parent.height;spacing:f(14);Text{text:backend.calibrationTitle;color:fg;font.pixelSize:f(22)}Text{width:parent.width;text:backend.calibrationStep===0?"Move the skate to the near limit position,\nthen press Save Near & Continue.":backend.calibrationStep===1?"Move the skate to the far limit position,\nthen press Save Far & Continue.":backend.calibrationStep===2?"Move the skate to the reference position,\nthen press Save Ref & Continue.":"Calibration points have been saved.";color:fg;font.pixelSize:f(15);lineHeight:1.45}Rectangle{width:parent.width;height:f(64);radius:f(5);color:"#1b2024";border.color:"#3f4649";Text{anchors.centerIn:parent;width:parent.width-f(24);text:"ⓘ   Ensure the skate is stable at the selected position before saving.";color:muted;font.pixelSize:f(13);wrapMode:Text.WordWrap}} }
+                    Column { width:parent.width*.53;height:parent.height;spacing:f(14);Text{text:backend.calibrationTitle;color:blue;font.pixelSize:f(22)}Text{width:parent.width;text:backend.calibrationStep===0?"Move the skate to the near limit position,\nthen press Save Near & Continue.":backend.calibrationStep===1?"Move the skate to the far limit position,\nthen press Save Far & Continue.":backend.calibrationStep===2?"Move the skate to the reference position,\nthen press Save Ref & Continue.":"Calibration points have been saved.";color:fg;font.pixelSize:f(15);lineHeight:1.45}Rectangle{width:parent.width;height:f(64);radius:f(5);color:"#1b2024";border.color:"#3f4649";Text{anchors.centerIn:parent;width:parent.width-f(24);text:"ⓘ   Ensure the skate is stable at the selected position before saving.";color:muted;font.pixelSize:f(13);wrapMode:Text.WordWrap}} }
                 }
                 Item {
                     width:parent.width;height:f(40)
@@ -592,4 +595,104 @@ ApplicationWindow {
             }
         }
     }
+
+
+    // -------------------- JOYSTICK CALIBRATION POPUP --------------------
+    Rectangle {
+        visible: backend.joystickCalibrationOpen
+        anchors.fill: parent
+        color: "#99070a0c"
+        z: 60
+        MouseArea { anchors.fill: parent }
+        Panel {
+            width: f(720)
+            height: f(540)
+            anchors.centerIn: parent
+            Column {
+                anchors.fill: parent
+                anchors.margins: f(20)
+                spacing: f(14)
+
+                Row {
+                    width: parent.width
+                    height: f(32)
+                    Text { width: parent.width-f(35); text: "Joystick Calibration"; color: blue; font.pixelSize: f(22); font.weight: Font.Medium }
+                    Text { width: f(35); text: "×"; color: fg; font.pixelSize: f(26); horizontalAlignment: Text.AlignHCenter; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: backend.cancelJoystickCalibration() } }
+                }
+
+                Row {
+                    width: parent.width
+                    height: f(68)
+                    spacing: 0
+                    Repeater {
+                        model: ["Set Left", "Set Centre", "Set Right"]
+                        Item {
+                            width: parent.width/3
+                            height: parent.height
+                            Rectangle { width:f(30); height:f(30); radius:f(15); anchors.horizontalCenter:parent.horizontalCenter; y:0; color:index<=backend.joystickCalibrationStep?blue:"#1b2024"; border.color:index<=backend.joystickCalibrationStep?blue:"#6b7275" }
+                            Text { anchors.horizontalCenter:parent.horizontalCenter; y:f(7); text:index+1; color:index<=backend.joystickCalibrationStep?"#081316":fg; font.pixelSize:f(13) }
+                            Rectangle { visible:index<2; x:parent.width/2+f(15); y:f(14); width:parent.width-f(30); height:1; color:index<backend.joystickCalibrationStep?blue:"#62686b" }
+                            Text { anchors.horizontalCenter:parent.horizontalCenter; y:f(39); text:modelData; color:index<=backend.joystickCalibrationStep?blue:fg; font.pixelSize:f(12) }
+                        }
+                    }
+                }
+
+                Rectangle { width:parent.width; height:1; color:"#3b4245" }
+
+                Column {
+                    width: parent.width
+                    height: f(225)
+                    spacing: f(12)
+                    Text { width:parent.width; text:backend.joystickCalibrationTitle; color:blue; font.pixelSize:f(22); font.weight:Font.Medium; horizontalAlignment:Text.AlignHCenter }
+                    Text {
+                        width: parent.width
+                        text: backend.joystickCalibrationStep===0 ? "Move and hold the joystick fully LEFT, then capture the position." : backend.joystickCalibrationStep===1 ? "Release the joystick to its natural CENTRE position, then capture the centre." : "Move and hold the joystick fully RIGHT, then capture the position to finish calibration."
+                        color: fg
+                        font.pixelSize: f(14)
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                    }
+                    Item {
+                        width: parent.width
+                        height: f(34)
+                        Text { anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; text:"LEFT"; color:blue; font.pixelSize:f(11) }
+                        Text { anchors.right:parent.right; anchors.verticalCenter:parent.verticalCenter; text:"RIGHT"; color:blue; font.pixelSize:f(11) }
+                        Rectangle { id:joyCalTrack; anchors.horizontalCenter:parent.horizontalCenter; anchors.verticalCenter:parent.verticalCenter; width:parent.width-f(120); height:1; color:"#697074" }
+                        Rectangle { anchors.verticalCenter:parent.verticalCenter; x:joyCalTrack.x+(joyCalTrack.width-width)*Math.max(0,Math.min(1,(backend.joystickRawValue+1)/2)); width:f(15); height:f(15); radius:f(8); color:blue; border.color:"#50646c"; border.width:f(4) }
+                    }
+                    Row {
+                        width: parent.width
+                        height: f(44)
+                        spacing: f(12)
+                        Repeater {
+                            model: [
+                                {label:"LEFT", key:"left"},
+                                {label:"CENTRE", key:"centre"},
+                                {label:"RIGHT", key:"right"}
+                            ]
+                            Item {
+                                width:(parent.width-f(24))/3
+                                height:parent.height
+                                Text { anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; width:f(58); text:modelData.label; color:blue; font.pixelSize:f(10) }
+                                HVReadout { anchors.right:parent.right; width:parent.width-f(62); height:f(31); anchors.verticalCenter:parent.verticalCenter; text:String(backend.joystickCalibrationCaptures[modelData.key]) }
+                            }
+                        }
+                    }
+                    Text { width:parent.width; text:"Current raw value:  "+Number(backend.joystickRawValue).toFixed(4); color:muted; font.pixelSize:f(12); horizontalAlignment:Text.AlignHCenter }
+                    Text { visible:backend.joystickCalibrationError!==""; width:parent.width; text:backend.joystickCalibrationError; color:red; font.pixelSize:f(12); horizontalAlignment:Text.AlignHCenter; wrapMode:Text.WordWrap }
+                }
+
+                Rectangle { width:parent.width; height:f(52); radius:f(5); color:"#1b2024"; border.color:"#3f4649"; Text { anchors.centerIn:parent; width:parent.width-f(24); text:"ⓘ   Winch output is held at zero during calibration and remains inhibited until the joystick is returned to centre."; color:muted; font.pixelSize:f(13); horizontalAlignment:Text.AlignHCenter; wrapMode:Text.WordWrap } }
+
+                Item {
+                    width: parent.width
+                    height: f(40)
+                    HVButton { anchors.left:parent.left; width:f(110); height:parent.height; text:"Cancel"; onClicked:backend.cancelJoystickCalibration() }
+                    HVButton { anchors.right:joyNextButton.left; anchors.rightMargin:f(12); width:f(110); height:parent.height; text:"Back"; enabled:backend.joystickCalibrationStep>0; onClicked:backend.joystickCalibrationBack() }
+                    HVButton { id:joyNextButton; anchors.right:parent.right; width:f(190); height:parent.height; text:backend.joystickCalibrationStep===0?"Set Left & Continue":backend.joystickCalibrationStep===1?"Set Centre & Continue":"Set Right & Done"; selected:true; accent:blue; onClicked:backend.joystickCalibrationNext() }
+                }
+            }
+        }
+    }
+
 }
