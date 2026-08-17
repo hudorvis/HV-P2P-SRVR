@@ -1,28 +1,27 @@
-# HV P2P SRVR v26.08.17.03 — Qt Quick macOS Intel test build
+# HV P2P SRVR v26.08.17.04 — Qt Quick macOS Intel test build
 
-Qt Quick / PySide6 development build of HV P2P SRVR.
+Development test package for the PySide6 + Qt Quick/QML frontend.
+
+This revision fixes the v26.08.17.03 macOS build failure where pyside6-deploy had no Qt/PySide project manifest and copied repository metadata (`.github`) into the generated `.app` bundle. The project now has an explicit `HV_P2P_SRVR.pyproject` file and the workflow separately ignores repository/build directories.
+
+The visible application remains Qt Quick/QML; Tkinter/ttk is not used.
 
 ## GitHub build
 
-Run **HV P2P SRVR - Qt Quick macOS Intel Test Build** under GitHub Actions.
-The development workflow builds macOS Intel only and does not use Apple Developer ID signing or notarisation.
+Upload the contents of this folder to the repository root and run:
 
-The final app is ad-hoc signed after all bundle modifications so its internal code signature is self-consistent for development testing.
+**Actions → HV P2P SRVR - Qt Quick macOS Intel Test Build**
 
-## Download format
+The workflow builds macOS Intel only. Development builds are not Developer ID signed or notarised.
 
-GitHub Actions always wraps an uploaded artifact in its own ZIP. To preserve the executable permissions and macOS bundle metadata of the `.app`, this workflow deliberately transports the app inside a permission-safe ZIP.
+The Actions artifact is named:
 
-Download the GitHub artifact:
+`HV-P2P-SRVR-v26.08.17.04-macOS-Intel`
 
-`HV-P2P-SRVR-v26.08.17.03-macOS-Intel.zip`
+GitHub downloads that artifact as a ZIP. Inside it is one permission-safe application ZIP:
 
-Inside it is exactly one file:
+`HV P2P SRVR v26.08.17.04 macOS Intel.zip`
 
-`HV P2P SRVR v26.08.17.03 macOS Intel.zip`
-
-Inside that is exactly one application:
+That inner ZIP contains only:
 
 `HV P2P SRVR.app`
-
-No `.py` or `.txt` files are included in the application ZIP.

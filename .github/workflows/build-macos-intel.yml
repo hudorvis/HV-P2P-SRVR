@@ -9,8 +9,8 @@ on:
       - 'backend.py'
       - 'qml/**'
       - 'resources.qrc'
+      - 'HV_P2P_SRVR.pyproject'
       - 'requirements.txt'
-      - 'assets/**'
       - '.github/workflows/build-macos-intel.yml'
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 45
     env:
-      APP_VERSION: '26.08.17.03'
+      APP_VERSION: '26.08.17.04'
       QT_QUICK_CONTROLS_STYLE: Basic
 
     steps:
@@ -52,6 +52,24 @@ jobs:
           print('PySide6:', PySide6.__version__)
           PY
 
+      - name: Validate project manifest
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -f HV_P2P_SRVR.pyproject
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('HV_P2P_SRVR.pyproject')
+          cfg=json.loads(p.read_text())
+          files=cfg['files']
+          assert files, 'project manifest is empty'
+          for f in files:
+              assert Path(f).exists(), f'missing project file: {f}'
+              assert not f.startswith('.github/'), 'workflow must never be an app source'
+          print('Project manifest OK:', len(files), 'source/resource files')
+          PY
+
       - name: Generate embedded Qt resources
         shell: bash
         run: |
@@ -65,87 +83,78 @@ jobs:
           set -euxo pipefail
           pyside6-qmllint qml/Main.qml qml/components/*.qml
 
-      - name: Build app icon
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p build/AppIcon.iconset
-          sips -z 16 16     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_16x16.png
-          sips -z 32 32     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_16x16@2x.png
-          sips -z 32 32     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_32x32.png
-          sips -z 64 64     assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_32x32@2x.png
-          sips -z 128 128   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_128x128.png
-          sips -z 256 256   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_128x128@2x.png
-          sips -z 256 256   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_256x256.png
-          sips -z 512 512   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_256x256@2x.png
-          sips -z 512 512   assets/HV_P2P_SRVR_icon.png --out build/AppIcon.iconset/icon_512x512.png
-          cp assets/HV_P2P_SRVR_icon.png build/AppIcon.iconset/icon_512x512@2x.png
-          iconutil -c icns build/AppIcon.iconset -o build/HV_P2P_SRVR.icns
-
       - name: Deploy Qt Quick macOS application
         shell: bash
         run: |
           set -euxo pipefail
-          pyside6-deploy main.py -f --name "HV P2P SRVR" --extra-modules=Quick,Qml,Gui,Network
+          # The explicit *.pyproject file limits deployment to actual application
+          # sources. The ignore list is a second guard against repository/build
+          # metadata being copied into Contents/MacOS.
+          pyside6-deploy main.py -f \
+            --name "HV P2P SRVR" \
+            --extra-ignore-dirs=.git,.github,assets,build,release,__pycache__ \
+            --extra-modules=Quick,Qml,Gui,Network
 
-          APP_PATH="$(find . -type d -name '*.app' -not -path './.git/*' | head -n 1)"
+          APP_PATH="$(find . -maxdepth 2 -type d -name '*.app' -not -path './.git/*' | head -n 1)"
           test -n "$APP_PATH"
           echo "Built app: $APP_PATH"
+
+          # Fail immediately if source-control/build metadata has leaked into the
+          # application. This was the exact cause of the v26.08.17.03 codesign failure.
+          LEAKS="$(find "$APP_PATH/Contents" -type d \( -name '.github' -o -name '.git' -o -name '__pycache__' \) -print || true)"
+          if [ -n "$LEAKS" ]; then
+            echo "ERROR: repository/build directories leaked into app bundle:"
+            echo "$LEAKS"
+            exit 1
+          fi
+
+          EXE="$(find "$APP_PATH/Contents/MacOS" -maxdepth 1 -type f -perm +111 | head -n 1)"
+          test -n "$EXE"
+          file "$EXE"
+          lipo -info "$EXE" || true
+          file "$EXE" | grep -q 'x86_64'
+
+          # Do not edit Info.plist, icon, or bundle contents after pyside6-deploy.
+          # First verify the signature produced by the Qt/Nuitka deployment.
+          if codesign --verify --deep --strict --verbose=2 "$APP_PATH"; then
+            echo "Qt/Nuitka bundle signature verified."
+          else
+            echo "Qt/Nuitka signature did not verify; applying a development-only ad-hoc signature."
+            codesign --force --deep --sign - --timestamp=none "$APP_PATH"
+            codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          fi
 
           mkdir -p release
           rm -rf "release/HV P2P SRVR.app"
           ditto "$APP_PATH" "release/HV P2P SRVR.app"
-
-          # Make every bundle change BEFORE the final ad-hoc signature.
-          mkdir -p "release/HV P2P SRVR.app/Contents/Resources"
-          cp build/HV_P2P_SRVR.icns "release/HV P2P SRVR.app/Contents/Resources/HV_P2P_SRVR.icns"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName HV P2P SRVR" "release/HV P2P SRVR.app/Contents/Info.plist" || true
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName HV P2P SRVR" "release/HV P2P SRVR.app/Contents/Info.plist" || true
-          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier au.h-v.hvp2p.srvr" "release/HV P2P SRVR.app/Contents/Info.plist" || true
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "release/HV P2P SRVR.app/Contents/Info.plist" || true
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_VERSION}" "release/HV P2P SRVR.app/Contents/Info.plist" || true
-          /usr/libexec/PlistBuddy -c "Delete :CFBundleIconFile" "release/HV P2P SRVR.app/Contents/Info.plist" || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string HV_P2P_SRVR.icns" "release/HV P2P SRVR.app/Contents/Info.plist"
-
-          EXE="$(find 'release/HV P2P SRVR.app/Contents/MacOS' -type f -perm +111 | head -n 1)"
-          test -n "$EXE"
-          file "$EXE"
-          lipo -info "$EXE" || true
-
-          # Development-only ad-hoc signature. This is NOT Developer ID signing
-          # and does NOT notarise the app. It simply ensures the final bundle has
-          # a self-consistent signature after we modify its icon and Info.plist.
-          codesign --force --deep --sign - --timestamp=none "release/HV P2P SRVR.app"
           codesign --verify --deep --strict --verbose=2 "release/HV P2P SRVR.app"
-          codesign -dv --verbose=4 "release/HV P2P SRVR.app" 2>&1 | head -80
 
-      - name: Package app for permission-safe artifact transport
+      - name: Package permission-safe application ZIP
         shell: bash
         run: |
           set -euxo pipefail
           ZIP="HV P2P SRVR v${APP_VERSION} macOS Intel.zip"
           rm -f "$ZIP"
-          # Keep the .app in an inner ZIP so GitHub artifact transport cannot
-          # strip executable bits or macOS bundle metadata.
           ditto -c -k --sequesterRsrc --keepParent "release/HV P2P SRVR.app" "$ZIP"
-          unzip -l "$ZIP"
+
           python - <<'PY'
-          import zipfile, os
+          import os, zipfile
           version=os.environ['APP_VERSION']
           z=f'HV P2P SRVR v{version} macOS Intel.zip'
           with zipfile.ZipFile(z) as f:
               names=f.namelist()
           assert names, 'empty ZIP'
           assert all(n.startswith('HV P2P SRVR.app/') or n == 'HV P2P SRVR.app/' for n in names), names[:20]
-          assert not any(n.endswith('.py') or n.endswith('.txt') for n in names), 'source file leaked into application ZIP'
-          print('Application ZIP verified: contains the .app bundle only')
+          forbidden=('.github/', '/.github/', '.git/', '/.git/', '__pycache__/')
+          assert not any(any(token in n for token in forbidden) for n in names), 'repository metadata leaked into release ZIP'
+          print('Application ZIP verified: one .app bundle only; no repository metadata.')
           PY
 
       - name: Upload GitHub Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HV-P2P-SRVR-v26.08.17.03-macOS-Intel
-          path: HV P2P SRVR v26.08.17.03 macOS Intel.zip
+          name: HV-P2P-SRVR-v26.08.17.04-macOS-Intel
+          path: HV P2P SRVR v26.08.17.04 macOS Intel.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
