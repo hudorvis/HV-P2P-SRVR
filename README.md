@@ -1,33 +1,28 @@
-# HV P2P SRVR v26.08.17.02 — Qt Quick test build
+# HV P2P SRVR v26.08.17.03 — Qt Quick macOS Intel test build
 
-This revision replaces the visible Tkinter/ttk user interface with **PySide6 + Qt Quick/QML**. There are no Tkinter imports in the application.
-
-The source is organised into a Python control engine (`backend.py`) and QML visual resources, but GitHub compiles them into **one macOS application bundle**.
+Qt Quick / PySide6 development build of HV P2P SRVR.
 
 ## GitHub build
 
-The workflow builds **macOS Intel only** on `macos-15-intel`. It does not use Apple Developer ID signing or notarisation during this test phase.
+Run **HV P2P SRVR - Qt Quick macOS Intel Test Build** under GitHub Actions.
+The development workflow builds macOS Intel only and does not use Apple Developer ID signing or notarisation.
 
-The workflow publishes a GitHub **Prerelease** asset named:
+The final app is ad-hoc signed after all bundle modifications so its internal code signature is self-consistent for development testing.
 
-`HV P2P SRVR v26.08.17.02 macOS Intel.zip`
+## Download format
 
-That ZIP contains only:
+GitHub Actions always wraps an uploaded artifact in its own ZIP. To preserve the executable permissions and macOS bundle metadata of the `.app`, this workflow deliberately transports the app inside a permission-safe ZIP.
+
+Download the GitHub artifact:
+
+`HV-P2P-SRVR-v26.08.17.03-macOS-Intel.zip`
+
+Inside it is exactly one file:
+
+`HV P2P SRVR v26.08.17.03 macOS Intel.zip`
+
+Inside that is exactly one application:
 
 `HV P2P SRVR.app`
 
-It deliberately does not use `actions/upload-artifact`, avoiding the previous ZIP-inside-a-ZIP download.
-
-## UI status
-
-Locked/final visual references implemented in Qt Quick:
-- shared header/status/navigation/footer shell
-- Run page
-- Preset 1–5
-- Preset 6–10
-- Limits
-- System
-- Limit Calibration popup
-- Free-D page
-
-Setup and Log remain functional/interim until their visual designs are separately reviewed and locked.
+No `.py` or `.txt` files are included in the application ZIP.

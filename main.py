@@ -12,7 +12,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.02"
+APP_VERSION = "26.08.17.03"
 
 
 

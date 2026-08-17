@@ -14,14 +14,14 @@ on:
       - '.github/workflows/build-macos-intel.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-macos-intel:
     runs-on: macos-15-intel
     timeout-minutes: 45
     env:
-      APP_VERSION: '26.08.17.02'
+      APP_VERSION: '26.08.17.03'
       QT_QUICK_CONTROLS_STYLE: Basic
 
     steps:
@@ -86,8 +86,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          # pyside6-deploy is Qt for Python's deployment tool. It scans the QML
-          # sources and produces a normal macOS .app using Nuitka.
           pyside6-deploy main.py -f --name "HV P2P SRVR" --extra-modules=Quick,Qml,Gui,Network
 
           APP_PATH="$(find . -type d -name '*.app' -not -path './.git/*' | head -n 1)"
@@ -98,7 +96,7 @@ jobs:
           rm -rf "release/HV P2P SRVR.app"
           ditto "$APP_PATH" "release/HV P2P SRVR.app"
 
-          # Add our icon to the bundle if the deployment tool used its default.
+          # Make every bundle change BEFORE the final ad-hoc signature.
           mkdir -p "release/HV P2P SRVR.app/Contents/Resources"
           cp build/HV_P2P_SRVR.icns "release/HV P2P SRVR.app/Contents/Resources/HV_P2P_SRVR.icns"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName HV P2P SRVR" "release/HV P2P SRVR.app/Contents/Info.plist" || true
@@ -114,15 +112,23 @@ jobs:
           file "$EXE"
           lipo -info "$EXE" || true
 
-      - name: Package exactly one app in exactly one ZIP
+          # Development-only ad-hoc signature. This is NOT Developer ID signing
+          # and does NOT notarise the app. It simply ensures the final bundle has
+          # a self-consistent signature after we modify its icon and Info.plist.
+          codesign --force --deep --sign - --timestamp=none "release/HV P2P SRVR.app"
+          codesign --verify --deep --strict --verbose=2 "release/HV P2P SRVR.app"
+          codesign -dv --verbose=4 "release/HV P2P SRVR.app" 2>&1 | head -80
+
+      - name: Package app for permission-safe artifact transport
         shell: bash
         run: |
           set -euxo pipefail
           ZIP="HV P2P SRVR v${APP_VERSION} macOS Intel.zip"
           rm -f "$ZIP"
+          # Keep the .app in an inner ZIP so GitHub artifact transport cannot
+          # strip executable bits or macOS bundle metadata.
           ditto -c -k --sequesterRsrc --keepParent "release/HV P2P SRVR.app" "$ZIP"
           unzip -l "$ZIP"
-          # The ZIP must contain the .app bundle and no sibling .py/.txt/source files.
           python - <<'PY'
           import zipfile, os
           version=os.environ['APP_VERSION']
@@ -131,25 +137,15 @@ jobs:
               names=f.namelist()
           assert names, 'empty ZIP'
           assert all(n.startswith('HV P2P SRVR.app/') or n == 'HV P2P SRVR.app/' for n in names), names[:20]
-          assert not any(n.endswith('.py') or n.endswith('.txt') for n in names), 'source file leaked into release ZIP'
-          print('Release ZIP verified: one .app bundle only')
+          assert not any(n.endswith('.py') or n.endswith('.txt') for n in names), 'source file leaked into application ZIP'
+          print('Application ZIP verified: contains the .app bundle only')
           PY
 
-      - name: Publish single ZIP as a GitHub prerelease asset
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euxo pipefail
-          TAG="v${APP_VERSION}-qtquick-test"
-          ZIP="HV P2P SRVR v${APP_VERSION} macOS Intel.zip"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$ZIP" --clobber
-          else
-            gh release create "$TAG" "$ZIP" \
-              --target "$GITHUB_SHA" \
-              --prerelease \
-              --title "HV P2P SRVR v${APP_VERSION} - Qt Quick macOS Intel Test" \
-              --notes "Qt Quick/PySide6 development test build. macOS Intel only. No Developer ID signing or notarisation. Download the single ZIP asset; it contains only HV P2P SRVR.app."
-          fi
-          gh release view "$TAG" --json url -q .url
+      - name: Upload GitHub Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HV-P2P-SRVR-v26.08.17.03-macOS-Intel
+          path: HV P2P SRVR v26.08.17.03 macOS Intel.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

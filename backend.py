@@ -132,7 +132,7 @@ class HVP2PBackend(QObject):
     logChanged = Signal()
     calibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.02"):
+    def __init__(self, version="26.08.17.03"):
         super().__init__()
         self.version = version
         self.started = time.time()
