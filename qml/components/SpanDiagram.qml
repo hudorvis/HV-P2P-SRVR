@@ -27,6 +27,25 @@ Item {
     property real farRamp: 0
     property color accent: "#72ed21"
 
+    // Repaint from the component's own bound properties instead of reaching
+    // out to the Python context property from inside this reusable component.
+    // This keeps qmllint fully qualified and also guarantees that both Run and
+    // Free-D repaint whenever their shared calculated profile or overlays change.
+    onCableProfileChanged: canvas.requestPaint()
+    onGeometryPointsChanged: canvas.requestPaint()
+    onPresetsChanged: canvas.requestPaint()
+    onShowGeometryPointsChanged: canvas.requestPaint()
+    onShowPresetsChanged: canvas.requestPaint()
+    onShowSkateChanged: canvas.requestPaint()
+    onShowReferenceChanged: canvas.requestPaint()
+    onCurrentPositionChanged: canvas.requestPaint()
+    onRefPointChanged: canvas.requestPaint()
+    onNearLimitChanged: canvas.requestPaint()
+    onFarLimitChanged: canvas.requestPaint()
+    onNearRampChanged: canvas.requestPaint()
+    onFarRampChanged: canvas.requestPaint()
+    onSideViewChanged: canvas.requestPaint()
+
     Text {
         x: 26; y: 14
         text: root.title
@@ -56,12 +75,6 @@ Item {
 
         onWidthChanged: requestPaint()
         onHeightChanged: requestPaint()
-        Connections {
-            target: backend
-            function onStateChanged() { canvas.requestPaint() }
-            function onConfigChanged() { canvas.requestPaint() }
-        }
-
         function profileFirstX() {
             if (root.cableProfile && root.cableProfile.length > 1)
                 return Number(root.cableProfile[0].x)

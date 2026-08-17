@@ -340,15 +340,149 @@ ApplicationWindow {
                                             width:parent.width; height:f(28)
                                             property var gp:backend.geometryPoints[index]
                                             Text{width:parent.width*.31;anchors.verticalCenter:parent.verticalCenter;text:parent.gp?parent.gp.name:"";color:fg;font.pixelSize:f(11)}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;modelText:parent.gp?Number(parent.gp.x).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setGeometryPoint(index,"x",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"x",n)}}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;modelText:parent.gp?Number(parent.gp.y).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setGeometryPoint(index,"y",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"y",n)}}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;readOnly:index!==0&&index!==4;modelText:(index===0||index===4)&&parent.gp?Number(parent.gp.z).toFixed(3):"—";horizontalAlignment:TextInput.AlignHCenter;onTextEdited:{if(index===0||index===4){var n=parseFloat(text);if(!isNaN(n))backend.setGeometryPoint(index,"z",n)}};onCommit:function(v){if(index===0||index===4){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"z",n)}}}
+                                            HVField {
+                                                width: parent.width * 0.23
+                                                height: parent.height
+                                                bindModel: true
+                                                modelText: parent.gp ? Number(parent.gp.x).toFixed(3) : "0.000"
+                                                horizontalAlignment: TextInput.AlignHCenter
+                                                onTextEdited: {
+                                                    var n = parseFloat(text)
+                                                    if (!isNaN(n))
+                                                        backend.setGeometryPoint(index, "x", n)
+                                                }
+                                                onCommit: function(v) {
+                                                    var n = parseFloat(v)
+                                                    if (!isNaN(n))
+                                                        backend.setGeometryPoint(index, "x", n)
+                                                }
+                                            }
+                                            HVField {
+                                                width: parent.width * 0.23
+                                                height: parent.height
+                                                bindModel: true
+                                                modelText: parent.gp ? Number(parent.gp.y).toFixed(3) : "0.000"
+                                                horizontalAlignment: TextInput.AlignHCenter
+                                                onTextEdited: {
+                                                    var n = parseFloat(text)
+                                                    if (!isNaN(n))
+                                                        backend.setGeometryPoint(index, "y", n)
+                                                }
+                                                onCommit: function(v) {
+                                                    var n = parseFloat(v)
+                                                    if (!isNaN(n))
+                                                        backend.setGeometryPoint(index, "y", n)
+                                                }
+                                            }
+                                            HVField {
+                                                width: parent.width * 0.23
+                                                height: parent.height
+                                                bindModel: true
+                                                readOnly: index !== 0 && index !== 4
+                                                modelText: (index === 0 || index === 4) && parent.gp ? Number(parent.gp.z).toFixed(3) : "—"
+                                                horizontalAlignment: TextInput.AlignHCenter
+                                                onTextEdited: {
+                                                    if (index === 0 || index === 4) {
+                                                        var n = parseFloat(text)
+                                                        if (!isNaN(n))
+                                                            backend.setGeometryPoint(index, "z", n)
+                                                    }
+                                                }
+                                                onCommit: function(v) {
+                                                    if (index === 0 || index === 4) {
+                                                        var n = parseFloat(v)
+                                                        if (!isNaN(n))
+                                                            backend.setGeometryPoint(index, "z", n)
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                     Text { text:"Weights & Tension"; color:fg; font.pixelSize:f(12); topPadding:f(4) }
-                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Static Weight:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+86);height:parent.height;bindModel:true;modelText:Number(backend.staticWeightValue).toFixed(2);onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Static",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Static",n)}}HVCombo{width:f(86);height:parent.height;model:["kg","lbs"];currentIndex:backend.staticWeightUnit==="lbs"?1:0;onActivated:function(){backend.setWeightUnit("Static",currentText)}} }
-                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Cable Weight:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+108);height:parent.height;bindModel:true;modelText:Number(backend.cableWeightValue).toFixed(2);onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Cable",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Cable",n)}}HVCombo{width:f(108);height:parent.height;model:["kg/100m","lbs/100m"];currentIndex:backend.cableWeightUnit==="lbs/100m"?1:0;onActivated:function(){backend.setWeightUnit("Cable",currentText)}} }
-                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Cable Tension:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+96);height:parent.height;bindModel:true;modelText:Number(backend.cableTensionValue).toFixed(2);onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Tension",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Tension",n)}}HVCombo{width:f(96);height:parent.height;model:["kg","lbs"];currentIndex:backend.cableTensionUnit==="lbs"?1:0;onActivated:function(){backend.setWeightUnit("Tension",currentText)}} }
+                                    Row {
+                                        width: parent.width
+                                        height: f(31)
+                                        Text { width: f(105); anchors.verticalCenter: parent.verticalCenter; text: "Static Weight:"; color: fg; font.pixelSize: f(11) }
+                                        HVField {
+                                            width: parent.width - f(105 + 86)
+                                            height: parent.height
+                                            bindModel: true
+                                            modelText: Number(backend.staticWeightValue).toFixed(2)
+                                            onTextEdited: {
+                                                var n = parseFloat(text)
+                                                if (!isNaN(n))
+                                                    backend.setWeightValue("Static", n)
+                                            }
+                                            onCommit: function(v) {
+                                                var n = parseFloat(v)
+                                                if (!isNaN(n))
+                                                    backend.setWeightValue("Static", n)
+                                            }
+                                        }
+                                        HVCombo {
+                                            width: f(86)
+                                            height: parent.height
+                                            model: ["kg", "lbs"]
+                                            currentIndex: backend.staticWeightUnit === "lbs" ? 1 : 0
+                                            onActivated: function() { backend.setWeightUnit("Static", currentText) }
+                                        }
+                                    }
+                                    Row {
+                                        width: parent.width
+                                        height: f(31)
+                                        Text { width: f(105); anchors.verticalCenter: parent.verticalCenter; text: "Cable Weight:"; color: fg; font.pixelSize: f(11) }
+                                        HVField {
+                                            width: parent.width - f(105 + 108)
+                                            height: parent.height
+                                            bindModel: true
+                                            modelText: Number(backend.cableWeightValue).toFixed(2)
+                                            onTextEdited: {
+                                                var n = parseFloat(text)
+                                                if (!isNaN(n))
+                                                    backend.setWeightValue("Cable", n)
+                                            }
+                                            onCommit: function(v) {
+                                                var n = parseFloat(v)
+                                                if (!isNaN(n))
+                                                    backend.setWeightValue("Cable", n)
+                                            }
+                                        }
+                                        HVCombo {
+                                            width: f(108)
+                                            height: parent.height
+                                            model: ["kg/100m", "lbs/100m"]
+                                            currentIndex: backend.cableWeightUnit === "lbs/100m" ? 1 : 0
+                                            onActivated: function() { backend.setWeightUnit("Cable", currentText) }
+                                        }
+                                    }
+                                    Row {
+                                        width: parent.width
+                                        height: f(31)
+                                        Text { width: f(105); anchors.verticalCenter: parent.verticalCenter; text: "Cable Tension:"; color: fg; font.pixelSize: f(11) }
+                                        HVField {
+                                            width: parent.width - f(105 + 96)
+                                            height: parent.height
+                                            bindModel: true
+                                            modelText: Number(backend.cableTensionValue).toFixed(2)
+                                            onTextEdited: {
+                                                var n = parseFloat(text)
+                                                if (!isNaN(n))
+                                                    backend.setWeightValue("Tension", n)
+                                            }
+                                            onCommit: function(v) {
+                                                var n = parseFloat(v)
+                                                if (!isNaN(n))
+                                                    backend.setWeightValue("Tension", n)
+                                            }
+                                        }
+                                        HVCombo {
+                                            width: f(96)
+                                            height: parent.height
+                                            model: ["kg", "lbs"]
+                                            currentIndex: backend.cableTensionUnit === "lbs" ? 1 : 0
+                                            onActivated: function() { backend.setWeightUnit("Tension", currentText) }
+                                        }
+                                    }
                                     Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Highline Mode:";color:fg;font.pixelSize:f(11)}HVCombo{width:parent.width-f(105);height:parent.height;model:["Single Highline","Dual Highline"];currentIndex:backend.highlineMode==="Dual Highline"?1:0;onActivated:function(){backend.setHighlineMode(currentText)}} }
                                 }
                             }

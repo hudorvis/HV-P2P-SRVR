@@ -22,7 +22,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 50
     env:
-      APP_VERSION: '26.08.17.09'
+      APP_VERSION: '26.08.17.10'
       QT_QUICK_CONTROLS_STYLE: Basic
       PYTHONUNBUFFERED: '1'
 
@@ -302,8 +302,8 @@ jobs:
       - name: Upload GitHub Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HV-P2P-SRVR-v26.08.17.09-macOS-Intel
-          path: HV P2P SRVR v26.08.17.09 macOS Intel.zip
+          name: HV-P2P-SRVR-v26.08.17.10-macOS-Intel
+          path: HV P2P SRVR v26.08.17.10 macOS Intel.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

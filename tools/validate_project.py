@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.09"
+VERSION = "26.08.17.10"
 ERRORS: list[str] = []
 
 
@@ -95,8 +95,29 @@ def strip_qml_strings_comments(s: str) -> str:
     return s
 
 for p in sorted((ROOT / "qml").rglob("*.qml")):
-    text = strip_qml_strings_comments(p.read_text(encoding="utf-8"))
-    require(text.count("{") == text.count("}"), f"unbalanced braces in {p.relative_to(ROOT)}")
+    raw = p.read_text(encoding="utf-8")
+    text = strip_qml_strings_comments(raw)
+
+    # Balanced QML/JavaScript delimiters. This is intentionally a small static
+    # guard rather than a replacement for Qt's authoritative qmllint in CI.
+    stack: list[tuple[str, int]] = []
+    pairs = {"}": "{", ")": "(", "]": "["}
+    for pos, ch in enumerate(text):
+        if ch in "{([":
+            stack.append((ch, pos))
+        elif ch in "})]":
+            if not stack or stack[-1][0] != pairs[ch]:
+                require(False, f"mismatched delimiter {ch!r} in {p.relative_to(ROOT)} at character {pos}")
+                break
+            stack.pop()
+    require(not stack, f"unclosed delimiter(s) in {p.relative_to(ROOT)}: {stack[-3:] if stack else []}")
+
+    # QML object attributes are not JavaScript statements. A semicolon after a
+    # signal-handler block (for example `onTextEdited: {...}; onCommit: ...`) is
+    # rejected by qmllint as an Unexpected token. v26.08.17.09 failed CI for
+    # exactly this pattern, so make it impossible to reintroduce silently.
+    require(re.search(r"}\s*;\s*on[A-Z][A-Za-z0-9_]*\s*:", text) is None,
+            f"illegal semicolon between QML signal handlers in {p.relative_to(ROOT)}")
 
 # Every backend.<name> reference in QML must be present on HVP2PBackend.
 try:
@@ -187,12 +208,29 @@ require('or (self.winch_rs_status != "Connected")' in backend and 'parts.append(
         "RS485/W1P failures are not rolled up to W1P in the operator banner")
 require('parts.append("RS485")' not in backend and 'parts.append("ADS1115")' not in backend,
         "low-level RS485/ADS1115 names leaked back into top E-stop banner")
-require('model:["kg/100m","lbs/100m"]' in qml_main and 'width:f(108)' in qml_main,
+require(re.search(r'model\s*:\s*\[\s*"kg/100m"\s*,\s*"lbs/100m"\s*\]', qml_main) is not None and
+        re.search(r'width\s*:\s*f\(108\)', qml_main) is not None,
         "Cable Weight kg/100m unit control is missing or too narrow")
-require('onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Tension",n)}' in qml_main,
+require(re.search(r'onTextEdited\s*:\s*\{[\s\S]{0,300}?setWeightValue\(\s*"Tension"\s*,\s*n\s*\)', qml_main) is not None,
         "Cable Tension does not live-preview the calculated sag while editing")
 require('editCommitSink.forceActiveFocus()' in qml_main and 'function changeShortcutTab' in qml_main,
         "page/tab changes do not explicitly commit the active editor first")
+
+# v10 QML-lint regression guard. v09 reached Qt's authoritative qmllint but
+# failed on six `}; onCommit:` separators. Keep the corrected handler syntax
+# and the two reusable components that produced the remaining lint warnings.
+hvcombo_qml = read("qml/components/HVCombo.qml")
+require('pragma ComponentBehavior: Bound' in hvcombo_qml,
+        "HVCombo must use bound component behavior for its popup delegate")
+require('required property int index' in hvcombo_qml and 'required property var modelData' in hvcombo_qml,
+        "HVCombo delegate roles are not explicitly declared")
+require('delegateItem.highlighted' in hvcombo_qml and 'delegateItem.modelData' in hvcombo_qml,
+        "HVCombo delegate still contains unqualified role/property access")
+require('target: backend' not in span_qml and 'backend.' not in span_qml,
+        "SpanDiagram reusable component must repaint from bound properties, not an unqualified backend context reference")
+require('onCableProfileChanged: canvas.requestPaint()' in span_qml and
+        'onCurrentPositionChanged: canvas.requestPaint()' in span_qml,
+        "SpanDiagram property-driven repaint hooks are missing")
 
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.
