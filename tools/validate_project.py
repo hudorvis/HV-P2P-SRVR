@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.06"
+VERSION = "26.08.17.07"
 ERRORS: list[str] = []
 
 
@@ -151,6 +151,18 @@ require("test -s pysidedeploy.spec" in workflow, "generated deployment spec audi
 require("QT_QPA_PLATFORM=cocoa" in workflow, "frozen app is not smoke-tested with the real Cocoa platform plugin")
 require("python -m tools.test_backend_logic" in workflow, "backend tests are not run as an import-safe module")
 require("sys.path.insert(0, str(ROOT))" in read("tools/test_backend_logic.py"), "backend test does not add repository root to sys.path")
+require(not re.search(r"(?m)^\s*ditto\s+.*--sequesterRsrc", workflow),
+        "software-distribution ZIP command must not use --sequesterRsrc")
+require('ditto -c -k --keepParent "release/HV P2P SRVR.app" "$ZIP"' in workflow,
+        "release ZIP is not created with the expected ditto command")
+require('ditto -x -k "$ZIP" "$VERIFY_DIR"' in workflow,
+        "release ZIP round-trip extraction validation missing")
+require('codesign --verify --deep --strict --verbose=2 "$ROUNDTRIP_APP"' in workflow,
+        "round-trip extracted app signature verification missing")
+require('xattr -cr "$APP_PATH" || true' in workflow,
+        "extended-attribute cleanup before final app signature is missing")
+require('QT_QPA_PLATFORM=cocoa "$ROUNDTRIP_EXE" --smoke-test' in workflow,
+        "round-trip extracted app smoke test missing")
 
 if ERRORS:
     print("HV P2P SRVR preflight FAILED:", file=sys.stderr)

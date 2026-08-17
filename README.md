@@ -1,8 +1,12 @@
-# HV P2P SRVR v26.08.17.06 — Qt Quick macOS Intel test build
+# HV P2P SRVR v26.08.17.07 — Qt Quick macOS Intel test build
+
+## v26.08.17.07 packaging correction
+
+The v26.08.17.06 application itself successfully reached the final packaging stage; the workflow failed only because `ditto --sequesterRsrc` intentionally added a hidden `__MACOSX` AppleDouble hierarchy to the ZIP and the archive validator correctly rejected every top-level entry that was not `HV P2P SRVR.app`. This revision removes `--sequesterRsrc`, verifies the ZIP has exactly one top-level `.app`, extracts that ZIP again on the GitHub Intel Mac runner, verifies executable permissions and the code signature after extraction, and launches the extracted frozen application in smoke-test mode before uploading the artifact.
 
 This is the next Qt Quick development build of HV P2P SRVR. The visible interface is PySide6 + Qt Quick/QML only; Tkinter/ttk is not used by the application UI.
 
-## What v26.08.17.06 fixes
+## What v26.08.17.07 fixes
 
 The v26.08.17.04 failure was caused by `pyside6-deploy`/Nuitka seeing the checked-out GitHub repository and copying `.github` into the generated `.app`. This revision does not deploy from the repository at all. GitHub Actions creates a clean directory under `$RUNNER_TEMP`, copies only `main.py`, `backend.py`, `resources.qrc`, `HV_P2P_SRVR.pyproject`, and `qml/`, and runs every Qt/Nuitka deployment command from that isolated directory. `.github` therefore does not exist in the deployment source tree.
 
@@ -25,7 +29,7 @@ The workflow now performs multiple preflight gates before publishing anything:
 
 ## Backend corrections found during the deep scan
 
-The Qt Quick port keeps the Python engine separate internally but packages it into the same macOS application. During the v26.08.17.06 audit, several important behaviours were corrected to match the proven v26.06.26.25 control contract:
+The Qt Quick port keeps the Python engine separate internally but packages it into the same macOS application. During the v26.08.17.07 audit, several important behaviours were corrected to match the proven v26.06.26.25 control contract:
 
 - Cable Slip uses `SYNC_POS`, not `SET_POSITION`.
 - Not Calibrated is a reduced-speed service state rather than an E-stop, allowing Limit Calibration to be performed.
@@ -54,11 +58,11 @@ The workflow is deliberately macOS Intel only for development. It does not use A
 
 At the bottom of the completed Actions run, download the artifact:
 
-`HV-P2P-SRVR-v26.08.17.06-macOS-Intel`
+`HV-P2P-SRVR-v26.08.17.07-macOS-Intel`
 
 GitHub wraps the artifact for transport. Inside it is:
 
-`HV P2P SRVR v26.08.17.06 macOS Intel.zip`
+`HV P2P SRVR v26.08.17.07 macOS Intel.zip`
 
 and that inner ZIP contains only:
 

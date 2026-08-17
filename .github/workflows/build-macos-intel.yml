@@ -22,7 +22,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 50
     env:
-      APP_VERSION: '26.08.17.06'
+      APP_VERSION: '26.08.17.07'
       QT_QUICK_CONTROLS_STYLE: Basic
       PYTHONUNBUFFERED: '1'
 
@@ -203,6 +203,12 @@ jobs:
           # Confirm Qt platform/QML runtime content exists before signing.
           find "$APP_PATH/Contents" -iname '*qcocoa*' -o -iname '*QtQuick*' | head -n 40 || true
 
+          # Strip incidental extended attributes before the final signature check.
+          # This keeps the software-distribution ZIP free of AppleDouble metadata
+          # and avoids depending on ditto's --sequesterRsrc mechanism. Any impact
+          # on an existing ad-hoc signature is handled immediately below.
+          xattr -cr "$APP_PATH" || true
+
           # No Info.plist/icon/resource edits are made after deployment. Preserve
           # Qt/Nuitka's own bundle signature when it is already valid. Only fall
           # back to a fresh ad-hoc development signature when verification says
@@ -234,27 +240,70 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           ZIP="HV P2P SRVR v${APP_VERSION} macOS Intel.zip"
           rm -f "$ZIP"
-          ditto -c -k --sequesterRsrc --keepParent "release/HV P2P SRVR.app" "$ZIP"
+          # IMPORTANT: Do not use --sequesterRsrc here. That option intentionally
+          # creates a parallel __MACOSX hierarchy for AppleDouble metadata. It was
+          # the sole cause of the v26.08.17.06 packaging assertion failure, and
+          # Apple DTS also advises against it for software-distribution ZIPs.
+          ditto -c -k --keepParent "release/HV P2P SRVR.app" "$ZIP"
 
+          # Validate the archive structurally before upload. There must be exactly
+          # one visible top-level bundle and no source/repository metadata.
           python - <<'PY'
           import os, zipfile
           version = os.environ['APP_VERSION']
           z = f'HV P2P SRVR v{version} macOS Intel.zip'
           with zipfile.ZipFile(z) as f:
               names = f.namelist()
+              bad_crc = f.testzip()
           assert names, 'empty ZIP'
-          assert all(n.startswith('HV P2P SRVR.app/') or n == 'HV P2P SRVR.app/' for n in names), names[:20]
+          assert bad_crc is None, f'ZIP CRC failure: {bad_crc}'
+
+          # No __MACOSX tree should be produced now that --sequesterRsrc is gone.
+          macosx = [n for n in names if n == '__MACOSX/' or n.startswith('__MACOSX/')]
+          assert not macosx, f'unexpected __MACOSX metadata in release ZIP: {macosx[:20]}'
+
+          top = {n.split('/', 1)[0] for n in names if n and not n.startswith('/') }
+          assert top == {'HV P2P SRVR.app'}, f'unexpected top-level ZIP entries: {sorted(top)}'
+          assert all(n == 'HV P2P SRVR.app/' or n.startswith('HV P2P SRVR.app/') for n in names), names[:30]
+
           forbidden = ('.github/', '/.github/', '.git/', '/.git/', '__pycache__/', '.pyproject', '.yml', '.yaml')
           bad = [n for n in names if any(token in n for token in forbidden)]
           assert not bad, f'repository metadata leaked into release ZIP: {bad[:20]}'
-          print('Release ZIP verified: one .app bundle only.')
+
+          required = [
+              'HV P2P SRVR.app/Contents/Info.plist',
+              'HV P2P SRVR.app/Contents/MacOS/',
+          ]
+          for req in required:
+              assert any(n == req or n.startswith(req) for n in names), f'missing required app content: {req}'
+          assert any(n.startswith('HV P2P SRVR.app/Contents/_CodeSignature/') for n in names), 'missing code signature resources'
+          print(f'Release ZIP verified: {len(names)} entries, one HV P2P SRVR.app bundle only.')
           PY
+
+          # Also round-trip the ZIP using macOS ditto, then verify the extracted
+          # application exactly as a user download will be extracted. This catches
+          # archive-layout, executable-permission, symlink and signature problems
+          # before GitHub is allowed to publish the artifact.
+          VERIFY_DIR="$RUNNER_TEMP/hvp2p-zip-roundtrip"
+          rm -rf "$VERIFY_DIR"
+          mkdir -p "$VERIFY_DIR"
+          ditto -x -k "$ZIP" "$VERIFY_DIR"
+          test -d "$VERIFY_DIR/HV P2P SRVR.app"
+          test "$(find "$VERIFY_DIR" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" = "1"
+          test ! -e "$VERIFY_DIR/__MACOSX"
+          ROUNDTRIP_APP="$VERIFY_DIR/HV P2P SRVR.app"
+          ROUNDTRIP_EXE="$(find "$ROUNDTRIP_APP/Contents/MacOS" -maxdepth 1 -type f -perm +111 | head -n 1)"
+          test -n "$ROUNDTRIP_EXE"
+          file "$ROUNDTRIP_EXE" | grep -q 'x86_64'
+          codesign --verify --deep --strict --verbose=2 "$ROUNDTRIP_APP"
+          QT_QPA_PLATFORM=cocoa "$ROUNDTRIP_EXE" --smoke-test
+          echo 'Round-trip ZIP extraction + signature + frozen-app smoke test PASS.'
 
       - name: Upload GitHub Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HV-P2P-SRVR-v26.08.17.06-macOS-Intel
-          path: HV P2P SRVR v26.08.17.06 macOS Intel.zip
+          name: HV-P2P-SRVR-v26.08.17.07-macOS-Intel
+          path: HV P2P SRVR v26.08.17.07 macOS Intel.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
