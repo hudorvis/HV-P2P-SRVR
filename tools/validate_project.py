@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.07"
+VERSION = "26.08.17.08"
 ERRORS: list[str] = []
 
 
@@ -119,8 +119,49 @@ require("parent.parent.avail*0.20" in qml_main, "Drive 20% width not fixed")
 require("parent.parent.avail*0.30" in qml_main, "Shortcuts 30% width not fixed")
 require('["Preset 1-5","Preset 6-10","Limits","System"]' in qml_main,
         "Shortcuts tab order changed")
-require("height:parent.height*0.58" in qml_main,
+require("height:parent.height*0.66" in qml_main,
         "Free-D upper/lower split regression detected")
+
+# Requested v08 interaction/design contract.
+require("Wide FOV" not in qml_main and "Narrow FOV" not in qml_main and "Tele FOV" not in qml_main,
+        "lens FOV fields/labels must be removed from the Qt Quick UI")
+require('height:f(27)' in qml_main and qml_main.find('text:"▱  SHORTCUTS"') < qml_main.find('model:["Preset 1-5","Preset 6-10","Limits","System"]'),
+        "Shortcuts heading/tab two-row layout missing")
+require('backend.toggleSrvrEStop()' in qml_main and 'def toggleSrvrEStop' in backend,
+        "SRVR status banner E-stop action is not wired")
+require('(backend.nearRampMode==="Percentage"?" %":" m")' in qml_main and
+        '(backend.farRampMode==="Percentage"?" %":" m")' in qml_main,
+        "ramp value field unit feedback missing")
+require("changeRampingMode" in backend and "backend.changeRampingMode" in qml_main,
+        "Distance/Percentage ramp conversion is not wired end-to-end")
+require("bindModel:true" in qml_main and "signal commit(string value)" in read("qml/components/HVField.qml"),
+        "focus-safe editable field binding is missing")
+for token in (
+    'backend.setPresetName', 'backend.setPresetPosition', 'backend.renameDriveMode',
+    'backend.setFreeDNetwork', 'backend.setFreeDOffset', 'backend.setFreeDInvert',
+    'backend.setGeometryPoint', 'backend.setWeightValue', 'backend.setWeightUnit',
+    'backend.setLensCalibration', 'backend.captureLens',
+    'backend.applyFreeDSettings', 'backend.resetFreeDSettings',
+):
+    require(token in qml_main, f"editable UI action not wired: {token}")
+for token in ("Parameter", "Raw", "Decoded", "Offset", "Invert", "Input Rate", "Output Rate"):
+    require(token in qml_main, f"Free-D Input/Output table content missing: {token}")
+require('model:["Cam ID","Pan","Tilt","Roll","Zoom","Focus","FPS"]' in qml_main,
+        "Free-D Input seven-row table is incomplete")
+require('model:["X","Y","Z","FPS"]' in qml_main,
+        "Free-D Output four-row table is incomplete")
+require("HVReadout.qml" in qrc_text and "HVCheck.qml" in qrc_text and "FreeDGeometryDiagram.qml" in qrc_text,
+        "new deterministic Qt Quick components are missing from resources.qrc")
+require("@Property('QVariantList', notify=configChanged)" in backend,
+        "editable list models still use the fast telemetry signal")
+require("self._saved_freed_snapshot" in backend and "resetFreeDSettings" in backend,
+        "Free-D Apply/Reset staging support missing")
+require("_kg_to_lb" in backend and "_lb_to_kg" in backend,
+        "kg/lbs automatic conversion support missing")
+require("skate_per_line" in backend and "point_drop" in backend and "highline_mode" in backend,
+        "Static Weight / Dual Highline sag model is not active in Free-D calculation")
+require('getattr(self, "_saved_freed_snapshot"' in backend and 'def _send_freed' in backend,
+        "live Free-D output is not using the last-applied settings snapshot")
 
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.

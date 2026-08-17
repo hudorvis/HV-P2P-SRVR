@@ -31,7 +31,7 @@ import PySide6.QtQuickControls2  # noqa: F401
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.07"
+APP_VERSION = "26.08.17.08"
 
 
 def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: HVP2PBackend) -> bool:
@@ -63,11 +63,56 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         app.processEvents()
         backend.cancelCalibration()
         app.processEvents()
+
+        # Exercise the editable Run/System controls that previously appeared
+        # visually correct but behaved read-only in the first Qt test builds.
+        backend.state.near_limit.position_m = 0.0
+        backend.state.far_limit.position_m = 100.0
+        backend.setPresetName(0, "Smoke Preset")
+        backend.setPresetPosition(0, 12.34)
+        if backend.presets[0]["name"] != "Smoke Preset" or abs(float(backend.presets[0]["position"]) - 12.34) > 1e-6:
+            raise RuntimeError("editable preset fields failed")
+        backend.renameDriveMode(0, "Smoke Mode")
+        if backend.driveMode1Name != "Smoke Mode":
+            raise RuntimeError("editable drive-mode name failed")
+        backend.setRamping("Near", "Distance", 20.0)
+        backend.changeRampingMode("Near", "Percentage")
+        if backend.nearRampMode != "Percentage" or abs(float(backend.nearRampValue) - 20.0) > 1e-6:
+            raise RuntimeError("ramp Distance->Percentage conversion failed")
+        backend.changeRampingMode("Near", "Distance")
+        if abs(float(backend.nearRampValue) - 20.0) > 1e-6:
+            raise RuntimeError("ramp Percentage->Distance conversion failed")
+
+        # Exercise staged Free-D editing plus Apply/Reset.
+        backend.setFreeDNetwork("Output", "IP", "172.20.1.30")
+        backend.setFreeDNetwork("Output", "Port", "5002")
+        backend.setFreeDNetwork("Output", "FPS", "50")
+        backend.setFreeDOffset("Input", "Pan", 1.25)
+        backend.setFreeDInvert("Output", "Y", True)
+        backend.setGeometryPoint(1, "x", 25.0)
+        backend.setGeometryPoint(1, "y", 5.0)
+        backend.setWeightUnit("Static", "lbs")
+        backend.setLensType("u16")
+        backend.setLensScale("Auto")
+        backend.applyFreeDSettings()
+        backend.setFreeDNetwork("Output", "IP", "10.0.0.99")
+        backend.resetFreeDSettings()
+        if backend.freeDOutputIp != "172.20.1.30":
+            raise RuntimeError("Free-D Apply/Reset failed")
+
+        # The shared status banner must retain the legacy SRVR software E-stop
+        # action without affecting other independent safety sources.
+        before = bool(backend._srvr_estop)
+        backend.toggleSrvrEStop()
+        backend.toggleSrvrEStop()
+        if bool(backend._srvr_estop) != before:
+            raise RuntimeError("SRVR E-stop toggle failed")
+        app.processEvents()
     except Exception as exc:
         print(f"SMOKE FAIL: {exc}", file=sys.stderr)
         return False
 
-    print("SMOKE PASS: QML pages, shortcuts and calibration overlay instantiated")
+    print("SMOKE PASS: QML pages, editable controls, Free-D Apply/Reset, shortcuts and calibration overlay instantiated")
     return True
 
 

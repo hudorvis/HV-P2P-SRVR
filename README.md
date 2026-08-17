@@ -1,68 +1,94 @@
-# HV P2P SRVR v26.08.17.07 — Qt Quick macOS Intel test build
+# HV P2P SRVR v26.08.17.08 — Qt Quick macOS Intel test build
 
-## v26.08.17.07 packaging correction
+This revision keeps the proven v26.08.17.07 Qt Quick build/deployment path and concentrates on the user-requested Run/Free-D interaction and visual-completeness pass. The visible application is PySide6 + Qt Quick/QML only; Tkinter/ttk is not used.
 
-The v26.08.17.06 application itself successfully reached the final packaging stage; the workflow failed only because `ditto --sequesterRsrc` intentionally added a hidden `__MACOSX` AppleDouble hierarchy to the ZIP and the archive validator correctly rejected every top-level entry that was not `HV P2P SRVR.app`. This revision removes `--sequesterRsrc`, verifies the ZIP has exactly one top-level `.app`, extracts that ZIP again on the GitHub Intel Mac runner, verifies executable permissions and the code signature after extraction, and launches the extracted frozen application in smoke-test mode before uploading the artifact.
+## v26.08.17.08 changes
 
-This is the next Qt Quick development build of HV P2P SRVR. The visible interface is PySide6 + Qt Quick/QML only; Tkinter/ttk is not used by the application UI.
+### Run page
 
-## What v26.08.17.07 fixes
+- Keeps the bottom cards mathematically fixed at **Drive 20% / Speed 25% / Position 25% / Shortcuts 30%** after fixed gutters are removed.
+- Restores the locked two-row Shortcuts heading/tab arrangement so the tabs sit below the `SHORTCUTS` heading.
+- Preset 1–10 name fields are genuinely editable and persist.
+- Preset cable-distance fields are genuinely editable, persist, and are constrained to the current cable span.
+- Save / Recall / Show-Hide are wired for all ten presets.
+- Near/Far/Reference Save / Recall / Slip remain wired.
+- Near/Far Ramping numeric fields are editable.
+- Changing Ramping **Distance ↔ Percentage converts the existing physical ramp point** instead of reinterpreting the same number. The value field immediately shows `m` or `%`.
+- Drive Mode 1 / Mode 2 names are editable in the System tab and persist.
+- Acceleration Mode, Battery Change Mode, Drive Mode selection, Limit Calibration and Winch Calibration are active controls.
+- The shared safety/status banner retains the legacy SRVR software E-stop action while independent CTRL/W1P/RS485 safety sources remain authoritative.
+- Top/Side diagrams keep the requested clean ramp-zone visual treatment and contain no lens FOV values.
 
-The v26.08.17.04 failure was caused by `pyside6-deploy`/Nuitka seeing the checked-out GitHub repository and copying `.github` into the generated `.app`. This revision does not deploy from the repository at all. GitHub Actions creates a clean directory under `$RUNNER_TEMP`, copies only `main.py`, `backend.py`, `resources.qrc`, `HV_P2P_SRVR.pyproject`, and `qml/`, and runs every Qt/Nuitka deployment command from that isolated directory. `.github` therefore does not exist in the deployment source tree.
+### Free-D page
 
-The Qt resource compiler now generates the expected `rc_resources.py` file for `resources.qrc`, removing the previous resource-name mismatch.
+- The locked four-card upper layout is preserved and made taller to match the approved Free-D reference more closely.
+- Free-D Input restores the complete boxed `Parameter / Raw / Decoded / Offset / Invert` table for Cam ID, Pan, Tilt, Roll, Zoom, Focus and FPS.
+- Free-D Output restores the complete boxed `Parameter / Raw / Decoded / Offset / Invert` table for X, Y, Z and FPS.
+- Input/Output enable, IP, port, offsets, inversion and output FPS controls are editable.
+- Geometry P1–P5 X/Y values are editable; Z remains editable only on P1/P5.
+- Static Weight supports kg/lbs with automatic conversion.
+- Cable Weight supports kg/100m or lbs/100m with automatic conversion.
+- Cable Tension supports kg/lbs with automatic conversion.
+- Single Highline / Dual Highline remains selectable and now materially affects the camera-package point-load sag calculation; Static Weight is part of the live Y calculation rather than a display-only field.
+- Lens Data Type supports `i16 / u16 / i24 / u24`.
+- Lens Data Scale supports `Auto / Manual / Full Scale`.
+- Live Zoom/Focus and Wide/Tele + Near/Far calibration fields/buttons are wired.
+- **Wide FOV / Tele FOV / Narrow FOV fields and FOV-value displays are removed** as requested.
+- Apply stores the current Free-D configuration; Reset restores the last applied Free-D configuration. The live outgoing Free-D stream uses the last-applied snapshot, so staged edits do not alter transmission before Apply.
 
-The GitHub build pins `PySide6==6.11.1` so a newer Qt/PySide release cannot silently change the deployment behaviour between test builds.
+### Editability fix
 
-The workflow now performs multiple preflight gates before publishing anything:
+Earlier Qt test builds bound text editors directly to frequently-changing backend state. That allowed refresh notifications to overwrite an edit while the operator was typing, making fields feel read-only. `HVField` now uses a focus-safe model binding: backend values refresh the field only while it is not being edited, and the user's value is committed on Return or focus loss.
 
-- Python syntax and static project validation.
-- Backend safety/calibration regression tests.
-- `pyside6-qmllint` against all QML files, with warnings reported but only real lint errors blocking the build.
-- Source-tree Qt Quick smoke test that creates all four pages, every Shortcuts tab, and the calibration overlay.
-- `pyside6-deploy --dry-run` inspection from the isolated tree plus an audit of the generated `pysidedeploy.spec`.
-- Completed `.app` scan for leaked repository metadata.
-- x86_64 executable verification.
-- Preserve Qt/Nuitka’s existing signature when valid; otherwise apply and verify a development ad-hoc signature.
-- Frozen `.app` smoke test using the real macOS Cocoa platform plugin before packaging.
-- Final ZIP content verification.
+Fast live telemetry uses `stateChanged`; operator configuration uses the separate `configChanged` signal, so 20 Hz telemetry cannot recreate editable models while a field has focus.
 
-## Backend corrections found during the deep scan
+## Control/backend checks
 
-The Qt Quick port keeps the Python engine separate internally but packages it into the same macOS application. During the v26.08.17.07 audit, several important behaviours were corrected to match the proven v26.06.26.25 control contract:
+The Qt frontend still packages with the Python control engine in one `.app`. Regression checks cover:
 
-- Cable Slip uses `SYNC_POS`, not `SET_POSITION`.
-- Not Calibrated is a reduced-speed service state rather than an E-stop, allowing Limit Calibration to be performed.
-- Service movement is limited to 5 km/h.
-- `SERVICE_MODE` is synchronised to W1P for Not Calibrated, calibration and Battery Change operation.
-- Battery Change auto-cancel is restored after travelling outside a limit and returning safely inside.
-- Limit Calibration establishes Near as 0.00 m, Far as a positive span distance, then Reference; normal calibrated state is restored only after Reference is saved.
-- The ADS1115 controller fault bit is treated as a fail-safe source.
-- W1P position feedback now rejects implausible jumps outside a short deliberate `SYNC_POS` grace window.
-- Preset positions remain operator distances relative to Near and are converted back to absolute W1P positions for Recall.
+- CTRL A6/A7 packet parsing and E-stop/ADS1115 safety handling.
+- W1P command contract including `SYNC_POS`, service mode, motion profile, span/limits and velocity commands.
+- 5 km/h service-speed restriction while Not Calibrated / calibrating / Battery Change.
+- predictive hard-limit and ramp-zone enforcement.
+- preset save/recall/edit behaviour.
+- SRVR software E-stop toggle.
+- Slip/SYNC re-reference.
+- Battery Change auto-cancel after returning inside limits.
+- Limit Calibration Near → Far → Ref → Done flow.
+- position-jump rejection.
+- ramp Distance/Percentage conversion.
+- Free-D editable network/offset/invert/geometry/lens/weight settings.
+- Free-D kg/lbs conversions and Apply/Reset staging persistence.
 
-## Run UI geometry
+## GitHub build gates
 
-The bottom Run row remains explicitly fixed to:
+The already-working v26.08.17.07 macOS Intel deployment path is retained:
 
-- Drive — 20%
-- Speed — 25%
-- Position — 25%
-- Shortcuts — 30%
+1. static Python/QML/backend interface validation;
+2. Python backend regression suite;
+3. isolated `$RUNNER_TEMP` Qt deployment source tree;
+4. `pyside6-rcc` and `pyside6-qmllint`;
+5. source Qt Quick smoke test;
+6. `pyside6-deploy` / Nuitka Intel build;
+7. repository-metadata leak scan;
+8. x86_64 verification;
+9. code-signature verification / development ad-hoc fallback;
+10. frozen Cocoa `.app` smoke test;
+11. permission-safe ZIP packaging;
+12. ZIP round-trip extraction, signature verification and a second frozen-app smoke test;
+13. GitHub Actions artifact upload only after all gates pass.
 
-No automatic content sizing is allowed to change those ratios.
+This remains a development build: macOS Intel only, with no Apple Developer ID signing or notarisation.
 
 ## GitHub output
 
-The workflow is deliberately macOS Intel only for development. It does not use Apple Developer ID signing or notarisation.
+Download the Actions artifact:
 
-At the bottom of the completed Actions run, download the artifact:
+`HV-P2P-SRVR-v26.08.17.08-macOS-Intel`
 
-`HV-P2P-SRVR-v26.08.17.07-macOS-Intel`
+Inside GitHub's transport ZIP is:
 
-GitHub wraps the artifact for transport. Inside it is:
-
-`HV P2P SRVR v26.08.17.07 macOS Intel.zip`
+`HV P2P SRVR v26.08.17.08 macOS Intel.zip`
 
 and that inner ZIP contains only:
 

@@ -128,11 +128,12 @@ class W1PClient(threading.Thread):
 
 
 class HVP2PBackend(QObject):
-    stateChanged = Signal()
+    stateChanged = Signal()          # fast live telemetry / safety updates
+    configChanged = Signal()         # operator-editable configuration updates
     logChanged = Signal()
     calibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.07", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.08", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
@@ -210,6 +211,7 @@ class HVP2PBackend(QObject):
         self.freed_lens_type = "u16"
         self.freed_lens_scale_mode = "Auto"
         self.freed_lens_cal = {"zoom_wide":0.0,"zoom_tele":32767.0,"focus_near":0.0,"focus_far":32767.0}
+        self._freed_lens_auto_seen = {"zoom_min":None,"zoom_max":None,"focus_min":None,"focus_max":None}
         self.geometry = [
             {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
             {"name":"P2","x":25.0,"y":5.0,"z":None},
@@ -220,6 +222,9 @@ class HVP2PBackend(QObject):
         self.static_weight_kg = 25.0
         self.cable_weight_kg100m = 4.5
         self.cable_tension_kg = 100.0
+        self.static_weight_unit = "kg"
+        self.cable_weight_unit = "kg/100m"
+        self.cable_tension_unit = "kg"
         self.highline_mode = "Single Highline"
         self._freed_in_stop = threading.Event()
         self._freed_in_sock = None
@@ -236,6 +241,7 @@ class HVP2PBackend(QObject):
 
         self._config_path = self._config_file_path()
         self._load_config()
+        self._saved_freed_snapshot = self._freed_snapshot()
         self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
         if not self.smoke_test:
             self.w1p.start()
@@ -461,6 +467,7 @@ class HVP2PBackend(QObject):
                 self._battery_change_went_outside_limits = False
                 self._sync_service_mode_to_winch(force=True)
                 self._save_config()
+                self.configChanged.emit()
                 self._log("[SRVR] Battery Change auto-cancelled: skate returned inside limits")
         except Exception:
             pass
@@ -630,49 +637,135 @@ class HVP2PBackend(QObject):
             if not data or len(data)<29 or data[0]!=0xD1: continue
             now=time.time(); raw_pan=_s24_to_int(data[2:5]); raw_tilt=_s24_to_int(data[5:8]); raw_roll=_s24_to_int(data[8:11])
             rz=_u24_to_int(data[20:23]); rf=_u24_to_int(data[23:26])
+            zoom_dec = self._decode_lens(rz)
+            focus_dec = self._decode_lens(rf)
+            self._remember_lens_auto("zoom", zoom_dec)
+            self._remember_lens_auto("focus", focus_dec)
             with self._lock:
                 self.freed_in_raw={"Cam ID":int(data[1]),"Pan":raw_pan,"Tilt":raw_tilt,"Roll":raw_roll,"Zoom":rz,"Focus":rf}
-                self.freed_in={"Cam ID":int(data[1]),"Pan":raw_pan/32768.0,"Tilt":raw_tilt/32768.0,"Roll":raw_roll/32768.0,"Zoom":self._decode_lens(rz),"Focus":self._decode_lens(rf)}
+                self.freed_in={"Cam ID":int(data[1]),"Pan":raw_pan/32768.0,"Tilt":raw_tilt/32768.0,"Roll":raw_roll/32768.0,"Zoom":zoom_dec,"Focus":focus_dec}
                 self.freed_input_last_rx=now; self._freed_in_times.append(now)
                 recent=[t for t in self._freed_in_times if t>=now-1]
                 self.freed_in_fps=(len(recent)-1)/(recent[-1]-recent[0]) if len(recent)>1 and recent[-1]>recent[0] else float(len(recent))
 
-    def _decode_lens(self,u24):
-        t=self.freed_lens_type.lower()
-        if t=="u24": return u24
-        if t=="u16": return u24 & 0xffff
-        if t=="i16":
-            v=u24 & 0xffff; return v-0x10000 if v&0x8000 else v
-        return u24-0x1000000 if u24&0x800000 else u24
+    @staticmethod
+    def _decode_lens_for_type(u24, lens_type: str):
+        t = str(lens_type).lower()
+        u24 = int(u24) & 0xFFFFFF
+        if t == "u24": return u24
+        if t == "u16": return u24 & 0xffff
+        if t == "i16":
+            v = u24 & 0xffff
+            return v - 0x10000 if v & 0x8000 else v
+        return u24 - 0x1000000 if u24 & 0x800000 else u24
 
-    def _xyz(self):
-        x=float(self.state.pos_m or 0.0)-float(self.state.near_limit.position_m or 0.0)
-        # Interpolate Y through P1..P5 then apply a smooth cable-sag estimate.
-        pts=[(float(p["x"]),float(p["y"])) for p in self.geometry]
+    def _input_sign(self, name: str, inverts=None) -> int:
+        # Preserve the proven v26.06.26.25 native Focus correction while
+        # keeping the visible user Invert checkbox OFF by default.
+        native = -1 if str(name).strip().lower() == "focus" else 1
+        inv = self.freed_input_inverts if inverts is None else dict(inverts)
+        user = -1 if bool(inv.get(str(name), False)) else 1
+        return native * user
+
+    def _output_sign(self, name: str, inverts=None) -> int:
+        inv = self.freed_output_inverts if inverts is None else dict(inverts)
+        return -1 if bool(inv.get(str(name), False)) else 1
+
+    def _decode_lens(self, u24):
+        return self._decode_lens_for_type(u24, self.freed_lens_type)
+
+    def _xyz(self, snap=None):
+        """Calculate Free-D X/Y/Z from either staged or applied settings.
+
+        Y uses the whole-span sag model from the proven backend: uniform cable
+        self-weight plus the suspended camera package as a point load. Dual
+        Highline shares the package load between two lines.
+        """
+        cfg = snap if isinstance(snap, dict) else None
+        geometry = [dict(p) for p in (cfg.get("geometry", self.geometry) if cfg else self.geometry)]
+        output_offsets = dict(cfg.get("output_offsets", self.freed_output_offsets) if cfg else self.freed_output_offsets)
+        cable_weight = float(cfg.get("cable_weight_kg100m", self.cable_weight_kg100m) if cfg else self.cable_weight_kg100m)
+        tension = float(cfg.get("cable_tension_kg", self.cable_tension_kg) if cfg else self.cable_tension_kg)
+        static_weight = float(cfg.get("static_weight_kg", self.static_weight_kg) if cfg else self.static_weight_kg)
+        highline = str(cfg.get("highline_mode", self.highline_mode) if cfg else self.highline_mode)
+
+        x = float(self.state.pos_m or 0.0) - float(self.state.near_limit.position_m or 0.0)
+        pts = [(float(p["x"]), float(p["y"])) for p in geometry]
         pts.sort()
-        y=pts[0][1]
-        for (x0,y0),(x1,y1) in zip(pts[:-1],pts[1:]):
-            if x0<=x<=x1:
-                t=(x-x0)/max(1e-9,x1-x0); y=y0+(y1-y0)*t; break
-        span=max(.1,pts[-1][0]-pts[0][0]); rel=max(0,min(span,x-pts[0][0]))
-        rope=max(0,self.cable_weight_kg100m)/100.0; tension=max(1,self.cable_tension_kg)
-        sag=(rope*rel*(span-rel))/(2*tension)
-        y-=sag
-        z0=float(self.geometry[0].get("z") or 0); z1=float(self.geometry[-1].get("z") or 0); z=z0+(z1-z0)*(rel/span)
-        return x+self.freed_output_offsets["X"], y+self.freed_output_offsets["Y"], z+self.freed_output_offsets["Z"]
+        base_y = pts[0][1]
+        if x <= pts[0][0]:
+            base_y = pts[0][1]
+        elif x >= pts[-1][0]:
+            base_y = pts[-1][1]
+        else:
+            for (x0,y0),(x1,y1) in zip(pts[:-1],pts[1:]):
+                if x0 <= x <= x1:
+                    t = (x-x0)/max(1e-9,x1-x0)
+                    base_y = y0+(y1-y0)*t
+                    break
+
+        support0, support1 = pts[0][0], pts[-1][0]
+        span = max(0.1, support1-support0)
+        clamped_x = max(support0, min(support1, x))
+        left = max(0.0, clamped_x-support0)
+        right = max(0.0, support1-clamped_x)
+        rope_kg_m = max(0.0, cable_weight)/100.0
+        tension_per_line = max(1.0, tension)
+        line_count = 2.0 if highline.strip().lower().startswith("dual") else 1.0
+        skate_per_line = max(0.0, static_weight)/line_count
+        cable_drop = (rope_kg_m * left * right) / (2.0 * tension_per_line)
+        point_drop = (skate_per_line * left * right) / (tension_per_line * span)
+        y = base_y - max(0.0, cable_drop + point_drop)
+
+        z0 = float(geometry[0].get("z") or 0.0)
+        z1 = float(geometry[-1].get("z") or 0.0)
+        rel = max(0.0, min(span, clamped_x-support0))
+        z = z0 + (z1-z0)*(rel/span)
+        return (
+            x + float(output_offsets.get("X",0.0)),
+            y + float(output_offsets.get("Y",0.0)),
+            z + float(output_offsets.get("Z",0.0)),
+        )
 
     def _send_freed(self):
-        if not self.freed_output_enabled: return
-        now=time.perf_counter(); hz=max(1,min(100,self.freed_rate_hz))
-        if now-self._last_freed_tx<1/hz: return
-        self._last_freed_tx=now; x,y,z=self._xyz(); m=self.freed_in
-        payload=bytearray((0xD1,max(0,min(255,int(m["Cam ID"])))))
-        for v in (m["Pan"],m["Tilt"],m["Roll"]): payload.extend(_s24be(round(float(v)*32768)))
-        for v in (x,y,z): payload.extend(_s24be(round(float(v)*self.freed_pos_scale)))
-        payload.extend(_s24be(int(m["Zoom"]))); payload.extend(_s24be(-int(m["Focus"]))); payload.extend(b"\x00\x00")
+        # The Free-D page has explicit Apply/Reset controls. Network output uses
+        # the last-applied snapshot so staged edits cannot alter the live packet
+        # stream until Apply is pressed.
+        applied = dict(getattr(self, "_saved_freed_snapshot", {}) or self._freed_snapshot())
+        if not bool(applied.get("output_enabled", self.freed_output_enabled)):
+            return
+        now = time.perf_counter()
+        hz = max(1.0, min(100.0, float(applied.get("rate_hz", self.freed_rate_hz))))
+        if now-self._last_freed_tx < 1.0/hz:
+            return
+        self._last_freed_tx = now
+        x,y,z = self._xyz(applied)
+        raw = self.freed_in_raw
+        in_offsets = dict(applied.get("input_offsets", self.freed_input_offsets))
+        in_inverts = dict(applied.get("input_inverts", self.freed_input_inverts))
+        out_inverts = dict(applied.get("output_inverts", self.freed_output_inverts))
+        lens_type = str(applied.get("lens_type", self.freed_lens_type))
+
+        pan = float(self.freed_in.get("Pan",0.0)) * self._input_sign("Pan", in_inverts) + float(in_offsets.get("Pan",0.0))
+        tilt = float(self.freed_in.get("Tilt",0.0)) * self._input_sign("Tilt", in_inverts) + float(in_offsets.get("Tilt",0.0))
+        roll = float(self.freed_in.get("Roll",0.0)) * self._input_sign("Roll", in_inverts) + float(in_offsets.get("Roll",0.0))
+        zoom_dec = self._decode_lens_for_type(int(raw.get("Zoom",0)), lens_type)
+        focus_dec = self._decode_lens_for_type(int(raw.get("Focus",0)), lens_type)
+        zoom = int(zoom_dec) * self._input_sign("Zoom", in_inverts)
+        focus = int(focus_dec) * self._input_sign("Focus", in_inverts)
+        ox = float(x) * self._output_sign("X", out_inverts)
+        oy = float(y) * self._output_sign("Y", out_inverts)
+        oz = float(z) * self._output_sign("Z", out_inverts)
+        pos_scale = max(1.0, float(applied.get("pos_scale", self.freed_pos_scale)))
+        payload = bytearray((0xD1, max(0,min(255,int(raw.get("Cam ID",1))))))
+        for v in (pan,tilt,roll): payload.extend(_s24be(round(float(v)*32768)))
+        for v in (ox,oy,oz): payload.extend(_s24be(round(float(v)*pos_scale)))
+        payload.extend(_s24be(int(zoom))); payload.extend(_s24be(int(focus))); payload.extend(b"\x00\x00")
         payload.append((0x40-sum(payload[:28]))&0xff)
-        try: self._freed_sock.sendto(bytes(payload),(self.freed_target_ip,self.freed_target_port))
-        except Exception: return
+        try:
+            self._freed_sock.sendto(bytes(payload),(str(applied.get("target_ip",self.freed_target_ip)), int(applied.get("target_port",self.freed_target_port))))
+        except Exception:
+            return
         t=time.perf_counter(); self._freed_out_times.append(t); recent=[q for q in self._freed_out_times if q>=t-1]
         self.freed_out_fps=(len(recent)-1)/(recent[-1]-recent[0]) if len(recent)>1 and recent[-1]>recent[0] else float(len(recent))
 
@@ -725,6 +818,132 @@ class HVP2PBackend(QObject):
         self.max_stop_decel_mps2 = float(m["stop_decel_mps2"])
         if sync:
             self._sync_w1p_settings()
+
+    @staticmethod
+    def _kg_to_lb(value: float) -> float:
+        return float(value) * 2.2046226218487757
+
+    @staticmethod
+    def _lb_to_kg(value: float) -> float:
+        return float(value) / 2.2046226218487757
+
+    def _freed_snapshot(self) -> dict:
+        """Return the complete editable Free-D configuration in canonical form."""
+        return {
+            "input_enabled": bool(self.freed_input_enabled),
+            "input_bind_ip": str(self.freed_input_bind_ip),
+            "input_port": int(self.freed_input_port),
+            "input_offsets": dict(self.freed_input_offsets),
+            "input_inverts": dict(self.freed_input_inverts),
+            "output_enabled": bool(self.freed_output_enabled),
+            "target_ip": str(self.freed_target_ip),
+            "target_port": int(self.freed_target_port),
+            "rate_hz": float(self.freed_rate_hz),
+            "output_offsets": dict(self.freed_output_offsets),
+            "output_inverts": dict(self.freed_output_inverts),
+            "pos_scale": float(self.freed_pos_scale),
+            "lens_type": str(self.freed_lens_type),
+            "lens_scale_mode": str(self.freed_lens_scale_mode),
+            "lens_cal": dict(self.freed_lens_cal),
+            "lens_auto_seen": dict(self._freed_lens_auto_seen),
+            "geometry": [dict(p) for p in self.geometry],
+            "static_weight_kg": float(self.static_weight_kg),
+            "cable_weight_kg100m": float(self.cable_weight_kg100m),
+            "cable_tension_kg": float(self.cable_tension_kg),
+            "static_weight_unit": str(self.static_weight_unit),
+            "cable_weight_unit": str(self.cable_weight_unit),
+            "cable_tension_unit": str(self.cable_tension_unit),
+            "highline_mode": str(self.highline_mode),
+        }
+
+    def _restore_freed_snapshot(self, snap: dict) -> None:
+        if not isinstance(snap, dict):
+            return
+        self.freed_input_enabled = bool(snap.get("input_enabled", self.freed_input_enabled))
+        self.freed_input_bind_ip = str(snap.get("input_bind_ip", self.freed_input_bind_ip))
+        self.freed_input_port = max(1, min(65535, int(snap.get("input_port", self.freed_input_port))))
+        self.freed_input_offsets = {k: float(v) for k, v in dict(snap.get("input_offsets", self.freed_input_offsets)).items() if k in ("Pan","Tilt","Roll")}
+        for k in ("Pan","Tilt","Roll"):
+            self.freed_input_offsets.setdefault(k, 0.0)
+        self.freed_input_inverts = {k: bool(v) for k, v in dict(snap.get("input_inverts", self.freed_input_inverts)).items() if k in ("Pan","Tilt","Roll","Zoom","Focus")}
+        for k in ("Pan","Tilt","Roll","Zoom","Focus"):
+            self.freed_input_inverts.setdefault(k, False)
+        self.freed_output_enabled = bool(snap.get("output_enabled", self.freed_output_enabled))
+        self.freed_target_ip = str(snap.get("target_ip", self.freed_target_ip))
+        self.freed_target_port = max(1, min(65535, int(snap.get("target_port", self.freed_target_port))))
+        self.freed_rate_hz = max(1.0, min(100.0, float(snap.get("rate_hz", self.freed_rate_hz))))
+        self.freed_output_offsets = {k: float(v) for k, v in dict(snap.get("output_offsets", self.freed_output_offsets)).items() if k in ("X","Y","Z")}
+        for k in ("X","Y","Z"):
+            self.freed_output_offsets.setdefault(k, 0.0)
+        self.freed_output_inverts = {k: bool(v) for k, v in dict(snap.get("output_inverts", self.freed_output_inverts)).items() if k in ("X","Y","Z")}
+        for k in ("X","Y","Z"):
+            self.freed_output_inverts.setdefault(k, False)
+        self.freed_pos_scale = max(1.0, float(snap.get("pos_scale", self.freed_pos_scale)))
+        self.freed_lens_type = str(snap.get("lens_type", self.freed_lens_type)) if str(snap.get("lens_type", self.freed_lens_type)) in ("i16","u16","i24","u24") else "u16"
+        self.freed_lens_scale_mode = self._normalise_lens_scale(snap.get("lens_scale_mode", self.freed_lens_scale_mode))
+        cal = dict(snap.get("lens_cal", self.freed_lens_cal))
+        for key in ("zoom_wide","zoom_tele","focus_near","focus_far"):
+            try: self.freed_lens_cal[key] = float(cal.get(key, self.freed_lens_cal[key]))
+            except Exception: pass
+        seen = dict(snap.get("lens_auto_seen", self._freed_lens_auto_seen))
+        self._freed_lens_auto_seen = {k: seen.get(k) for k in ("zoom_min","zoom_max","focus_min","focus_max")}
+        geom = snap.get("geometry")
+        if isinstance(geom, list) and len(geom) >= 5:
+            self.geometry = [dict(geom[i]) for i in range(5)]
+            for i, g in enumerate(self.geometry):
+                g["name"] = str(g.get("name") or ("P1 (Near)" if i == 0 else "P5 (Far)" if i == 4 else f"P{i+1}"))
+                g["x"] = float(g.get("x", i*25.0))
+                g["y"] = float(g.get("y", 0.0))
+                g["z"] = float(g.get("z", 0.0) or 0.0) if i in (0,4) else None
+        self.static_weight_kg = max(0.0, float(snap.get("static_weight_kg", self.static_weight_kg)))
+        self.cable_weight_kg100m = max(0.0, float(snap.get("cable_weight_kg100m", self.cable_weight_kg100m)))
+        self.cable_tension_kg = max(0.01, float(snap.get("cable_tension_kg", self.cable_tension_kg)))
+        self.static_weight_unit = "lbs" if str(snap.get("static_weight_unit", self.static_weight_unit)).lower().startswith("lb") else "kg"
+        self.cable_weight_unit = "lbs/100m" if str(snap.get("cable_weight_unit", self.cable_weight_unit)).lower().startswith("lb") else "kg/100m"
+        self.cable_tension_unit = "lbs" if str(snap.get("cable_tension_unit", self.cable_tension_unit)).lower().startswith("lb") else "kg"
+        self.highline_mode = "Dual Highline" if str(snap.get("highline_mode", self.highline_mode)).lower().startswith("dual") else "Single Highline"
+
+    @staticmethod
+    def _normalise_lens_scale(value) -> str:
+        text = str(value or "Auto").strip().lower()
+        if text.startswith("full"):
+            return "Full Scale"
+        if text.startswith("manual"):
+            return "Manual"
+        return "Auto"
+
+    def _lens_limits(self):
+        t = str(self.freed_lens_type).lower()
+        if t == "u16": return 0.0, 65535.0
+        if t == "i16": return -32768.0, 32767.0
+        if t == "u24": return 0.0, 16777215.0
+        return -8388608.0, 8388607.0
+
+    def _lens_percent(self, field: str, value: float) -> float:
+        field = "zoom" if str(field).lower().startswith("zoom") else "focus"
+        mode = str(self.freed_lens_scale_mode)
+        if mode == "Full Scale":
+            lo, hi = self._lens_limits()
+        elif mode == "Auto":
+            lo = self._freed_lens_auto_seen.get(field+"_min")
+            hi = self._freed_lens_auto_seen.get(field+"_max")
+            if lo is None or hi is None or abs(float(hi)-float(lo)) < 1e-9:
+                lo = float(self.freed_lens_cal["zoom_wide" if field == "zoom" else "focus_near"])
+                hi = float(self.freed_lens_cal["zoom_tele" if field == "zoom" else "focus_far"])
+        else:
+            lo = float(self.freed_lens_cal["zoom_wide" if field == "zoom" else "focus_near"])
+            hi = float(self.freed_lens_cal["zoom_tele" if field == "zoom" else "focus_far"])
+        if abs(float(hi)-float(lo)) < 1e-9:
+            return 0.0
+        return max(0.0, min(100.0, (float(value)-float(lo)) * 100.0 / (float(hi)-float(lo))))
+
+    def _remember_lens_auto(self, field: str, value: float) -> None:
+        field = "zoom" if str(field).lower().startswith("zoom") else "focus"
+        v = float(value)
+        mn, mx = field+"_min", field+"_max"
+        old_min, old_max = self._freed_lens_auto_seen.get(mn), self._freed_lens_auto_seen.get(mx)
+        self._freed_lens_auto_seen[mn] = v if old_min is None else min(float(old_min), v)
+        self._freed_lens_auto_seen[mx] = v if old_max is None else max(float(old_max), v)
 
     def _load_config(self):
         try:
@@ -795,20 +1014,42 @@ class HVP2PBackend(QObject):
             self.freed_target_port = max(1, min(65535, int(fd.get("target_port", self.freed_target_port))))
             self.freed_rate_hz = max(1.0, min(100.0, float(fd.get("rate_hz", self.freed_rate_hz))))
             self.freed_pos_scale = max(1.0, float(fd.get("pos_scale", self.freed_pos_scale)))
+            self.freed_input_offsets = {k: float(v) for k,v in dict(fd.get("input_offsets", self.freed_input_offsets)).items() if k in ("Pan","Tilt","Roll")}
+            for k in ("Pan","Tilt","Roll"): self.freed_input_offsets.setdefault(k, 0.0)
+            self.freed_input_inverts = {k: bool(v) for k,v in dict(fd.get("input_inverts", self.freed_input_inverts)).items() if k in ("Pan","Tilt","Roll","Zoom","Focus")}
+            for k in ("Pan","Tilt","Roll","Zoom","Focus"): self.freed_input_inverts.setdefault(k, False)
+            self.freed_output_offsets = {k: float(v) for k,v in dict(fd.get("output_offsets", self.freed_output_offsets)).items() if k in ("X","Y","Z")}
+            for k in ("X","Y","Z"): self.freed_output_offsets.setdefault(k, 0.0)
+            self.freed_output_inverts = {k: bool(v) for k,v in dict(fd.get("output_inverts", self.freed_output_inverts)).items() if k in ("X","Y","Z")}
+            for k in ("X","Y","Z"): self.freed_output_inverts.setdefault(k, False)
             self.freed_lens_type = str(fd.get("lens_type", self.freed_lens_type)) if str(fd.get("lens_type", self.freed_lens_type)) in ("i16","u16","i24","u24") else "u16"
-            scale = str(fd.get("lens_scale_mode", self.freed_lens_scale_mode))
-            self.freed_lens_scale_mode = scale if scale in ("Auto","Manual","Full Scale") else "Auto"
+            self.freed_lens_scale_mode = self._normalise_lens_scale(fd.get("lens_scale_mode", self.freed_lens_scale_mode))
+            lens_cal = dict(fd.get("lens_cal", self.freed_lens_cal))
+            for key in ("zoom_wide","zoom_tele","focus_near","focus_far"):
+                try: self.freed_lens_cal[key] = float(lens_cal.get(key, self.freed_lens_cal[key]))
+                except Exception: pass
+            seen = dict(fd.get("lens_auto_seen", self._freed_lens_auto_seen))
+            self._freed_lens_auto_seen = {k: seen.get(k) for k in ("zoom_min","zoom_max","focus_min","focus_max")}
             self.static_weight_kg = max(0.0, float(fd.get("static_weight_kg", self.static_weight_kg)))
             self.cable_weight_kg100m = max(0.0, float(fd.get("cable_weight_kg100m", self.cable_weight_kg100m)))
-            self.cable_tension_kg = max(1.0, float(fd.get("cable_tension_kg", self.cable_tension_kg)))
+            self.cable_tension_kg = max(0.01, float(fd.get("cable_tension_kg", self.cable_tension_kg)))
+            self.static_weight_unit = "lbs" if str(fd.get("static_weight_unit", self.static_weight_unit)).lower().startswith("lb") else "kg"
+            self.cable_weight_unit = "lbs/100m" if str(fd.get("cable_weight_unit", self.cable_weight_unit)).lower().startswith("lb") else "kg/100m"
+            self.cable_tension_unit = "lbs" if str(fd.get("cable_tension_unit", self.cable_tension_unit)).lower().startswith("lb") else "kg"
             self.highline_mode = "Dual Highline" if str(fd.get("highline_mode", self.highline_mode)).lower().startswith("dual") else "Single Highline"
         except Exception as exc:
             self._log(f"[Config] load failed: {exc}")
             self.drive_modes = self._normalise_drive_modes(self.drive_modes)
             self._apply_active_drive_profile(sync=False)
 
-    def _save_config(self):
+    def _save_config(self, include_staged_freed: bool = False):
         try:
+            # Free-D has explicit Apply/Reset semantics. Unrelated saves (preset,
+            # drive mode, etc.) must not accidentally commit staged Free-D edits.
+            if include_staged_freed or not hasattr(self, "_saved_freed_snapshot"):
+                freed_snap = self._freed_snapshot()
+            else:
+                freed_snap = dict(self._saved_freed_snapshot)
             c = {
                 "ctrl_ip": self.ctrl_ip,
                 "w1p_ip": self.w1p_ip,
@@ -829,22 +1070,31 @@ class HVP2PBackend(QObject):
                     "nearRamp": {"mode":self.state.near_limit.ramp_mode,"distance":self.state.near_limit.ramp_distance_m,"percentage":self.state.near_limit.ramp_percentage},
                     "farRamp": {"mode":self.state.far_limit.ramp_mode,"distance":self.state.far_limit.ramp_distance_m,"percentage":self.state.far_limit.ramp_percentage},
                 },
-                "geometry": self.geometry,
+                "geometry": [dict(p) for p in freed_snap.get("geometry", self.geometry)],
                 "free_d": {
-                    "input_enabled": self.freed_input_enabled,
-                    "input_bind_ip": self.freed_input_bind_ip,
-                    "input_port": self.freed_input_port,
-                    "output_enabled": self.freed_output_enabled,
-                    "target_ip": self.freed_target_ip,
-                    "target_port": self.freed_target_port,
-                    "rate_hz": self.freed_rate_hz,
-                    "pos_scale": self.freed_pos_scale,
-                    "lens_type": self.freed_lens_type,
-                    "lens_scale_mode": self.freed_lens_scale_mode,
-                    "static_weight_kg": self.static_weight_kg,
-                    "cable_weight_kg100m": self.cable_weight_kg100m,
-                    "cable_tension_kg": self.cable_tension_kg,
-                    "highline_mode": self.highline_mode,
+                    "input_enabled": bool(freed_snap.get("input_enabled", self.freed_input_enabled)),
+                    "input_bind_ip": str(freed_snap.get("input_bind_ip", self.freed_input_bind_ip)),
+                    "input_port": int(freed_snap.get("input_port", self.freed_input_port)),
+                    "output_enabled": bool(freed_snap.get("output_enabled", self.freed_output_enabled)),
+                    "target_ip": str(freed_snap.get("target_ip", self.freed_target_ip)),
+                    "target_port": int(freed_snap.get("target_port", self.freed_target_port)),
+                    "rate_hz": float(freed_snap.get("rate_hz", self.freed_rate_hz)),
+                    "pos_scale": float(freed_snap.get("pos_scale", self.freed_pos_scale)),
+                    "input_offsets": dict(freed_snap.get("input_offsets", self.freed_input_offsets)),
+                    "input_inverts": dict(freed_snap.get("input_inverts", self.freed_input_inverts)),
+                    "output_offsets": dict(freed_snap.get("output_offsets", self.freed_output_offsets)),
+                    "output_inverts": dict(freed_snap.get("output_inverts", self.freed_output_inverts)),
+                    "lens_type": str(freed_snap.get("lens_type", self.freed_lens_type)),
+                    "lens_scale_mode": str(freed_snap.get("lens_scale_mode", self.freed_lens_scale_mode)),
+                    "lens_cal": dict(freed_snap.get("lens_cal", self.freed_lens_cal)),
+                    "lens_auto_seen": dict(freed_snap.get("lens_auto_seen", self._freed_lens_auto_seen)),
+                    "static_weight_kg": float(freed_snap.get("static_weight_kg", self.static_weight_kg)),
+                    "cable_weight_kg100m": float(freed_snap.get("cable_weight_kg100m", self.cable_weight_kg100m)),
+                    "cable_tension_kg": float(freed_snap.get("cable_tension_kg", self.cable_tension_kg)),
+                    "static_weight_unit": str(freed_snap.get("static_weight_unit", self.static_weight_unit)),
+                    "cable_weight_unit": str(freed_snap.get("cable_weight_unit", self.cable_weight_unit)),
+                    "cable_tension_unit": str(freed_snap.get("cable_tension_unit", self.cable_tension_unit)),
+                    "highline_mode": str(freed_snap.get("highline_mode", self.highline_mode)),
                 },
             }
             self._config_path.write_text(json.dumps(c, indent=2))
@@ -866,6 +1116,7 @@ class HVP2PBackend(QObject):
     def bannerText(self):
         if not self.state.estop_active: return "SYSTEM READY"
         parts=[]
+        if self._srvr_estop: parts.append("SRVR")
         if self._ctrl_estop: parts.append("CTRL")
         if self._w1p_estop: parts.append("W1P")
         if self._ctrl_flags & FLAG_ADS1115_FAULT: parts.append("ADS1115")
@@ -900,40 +1151,113 @@ class HVP2PBackend(QObject):
     def farRampDistance(self):
         span = abs(float(self.farLimit) - float(self.nearLimit))
         return float(self._ramp_distance(self.state.far_limit, span))
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=configChanged)
     def nearRampMode(self): return str(self.state.near_limit.ramp_mode)
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=configChanged)
     def farRampMode(self): return str(self.state.far_limit.ramp_mode)
-    @Property(float, notify=stateChanged)
+    @Property(float, notify=configChanged)
     def nearRampValue(self):
         return float(self.state.near_limit.ramp_percentage if self.state.near_limit.ramp_mode == "Percentage" else self.state.near_limit.ramp_distance_m)
-    @Property(float, notify=stateChanged)
+    @Property(float, notify=configChanged)
     def farRampValue(self):
         return float(self.state.far_limit.ramp_percentage if self.state.far_limit.ramp_mode == "Percentage" else self.state.far_limit.ramp_distance_m)
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=configChanged)
     def driveModeName(self): return str(self.drive_modes[self.active_drive_mode].get("name",f"Mode {self.active_drive_mode+1}"))
-    @Property(int, notify=stateChanged)
+    @Property(int, notify=configChanged)
     def activeDriveMode(self): return int(self.active_drive_mode)
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=configChanged)
     def driveMode1Name(self): return str(self.drive_modes[0].get("name", "Mode 1"))
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=configChanged)
     def driveMode2Name(self): return str(self.drive_modes[1].get("name", "Mode 2"))
-    @Property(str, notify=stateChanged)
+    @Property(str, notify=configChanged)
     def accelerationMode(self): return self.acceleration_mode
-    @Property(bool, notify=stateChanged)
+    @Property(bool, notify=configChanged)
     def batteryChange(self): return self.battery_change_mode
-    @Property('QVariantList', notify=stateChanged)
+    @Property('QVariantList', notify=configChanged)
     def presets(self):
         return [{"index":i,"label":f"P{i+1}","name":self.preset_names[i],"position":self.preset_positions[i] if self.preset_positions[i] is not None else 0.0,"set":self.preset_positions[i] is not None,"visible":self.preset_visible[i]} for i in range(10)]
-    @Property('QVariantList', notify=stateChanged)
+    @Property('QVariantList', notify=configChanged)
     def geometryPoints(self): return self.geometry
     @Property('QVariantMap', notify=stateChanged)
     def freeDInput(self):
         r=self.freed_in_raw; d=self.freed_in
-        return {"cam":int(r["Cam ID"]),"panRaw":int(r["Pan"]),"pan":float(d["Pan"]),"tiltRaw":int(r["Tilt"]),"tilt":float(d["Tilt"]),"rollRaw":int(r["Roll"]),"roll":float(d["Roll"]),"zoomRaw":int(r["Zoom"]),"zoom":float(d["Zoom"]),"focusRaw":int(r["Focus"]),"focus":float(d["Focus"]),"fps":float(self.freed_in_fps)}
+        pan = float(d["Pan"]) * self._input_sign("Pan") + float(self.freed_input_offsets.get("Pan", 0.0))
+        tilt = float(d["Tilt"]) * self._input_sign("Tilt") + float(self.freed_input_offsets.get("Tilt", 0.0))
+        roll = float(d["Roll"]) * self._input_sign("Roll") + float(self.freed_input_offsets.get("Roll", 0.0))
+        zoom = float(d["Zoom"]) * self._input_sign("Zoom")
+        focus = float(d["Focus"]) * self._input_sign("Focus")
+        return {
+            "cam":int(r["Cam ID"]),"panRaw":int(r["Pan"]),"pan":pan,
+            "tiltRaw":int(r["Tilt"]),"tilt":tilt,"rollRaw":int(r["Roll"]),"roll":roll,
+            "zoomRaw":int(r["Zoom"]),"zoom":zoom,"focusRaw":int(r["Focus"]),"focus":focus,
+            "zoomPct":self._lens_percent("zoom", zoom),"focusPct":self._lens_percent("focus", focus),
+            "fps":float(self.freed_in_fps)
+        }
     @Property('QVariantMap', notify=stateChanged)
     def freeDOutput(self):
-        x,y,z=self._xyz(); return {"x":x,"y":y,"z":z,"fps":self.freed_out_fps}
+        x,y,z=self._xyz()
+        return {
+            "x":float(x)*self._output_sign("X"),
+            "y":float(y)*self._output_sign("Y"),
+            "z":float(z)*self._output_sign("Z"),
+            "fps":float(self.freed_out_fps),
+            "targetFps":float(self.freed_rate_hz),
+        }
+
+    # Editable Setup / Free-D configuration uses a slower configChanged signal so
+    # live 20 Hz telemetry updates cannot steal focus or reset text while typing.
+    @Property(str, notify=configChanged)
+    def ctrlIp(self): return str(self.ctrl_ip)
+    @Property(str, notify=configChanged)
+    def w1pIp(self): return str(self.w1p_ip)
+    @Property(bool, notify=configChanged)
+    def ctrlInverted(self): return bool(self.reverse_joystick)
+    @Property(bool, notify=configChanged)
+    def w1pInverted(self): return bool(self.reverse_motor)
+    @Property(float, notify=configChanged)
+    def unitsPerM(self): return float(self.winch_units_per_m)
+    @Property(bool, notify=configChanged)
+    def freeDInputEnabled(self): return bool(self.freed_input_enabled)
+    @Property(str, notify=configChanged)
+    def freeDInputIp(self): return str(self.freed_input_bind_ip)
+    @Property(int, notify=configChanged)
+    def freeDInputPort(self): return int(self.freed_input_port)
+    @Property(bool, notify=configChanged)
+    def freeDOutputEnabled(self): return bool(self.freed_output_enabled)
+    @Property(str, notify=configChanged)
+    def freeDOutputIp(self): return str(self.freed_target_ip)
+    @Property(int, notify=configChanged)
+    def freeDOutputPort(self): return int(self.freed_target_port)
+    @Property(float, notify=configChanged)
+    def freeDOutputRate(self): return float(self.freed_rate_hz)
+    @Property('QVariantMap', notify=configChanged)
+    def freeDInputOffsets(self): return dict(self.freed_input_offsets)
+    @Property('QVariantMap', notify=configChanged)
+    def freeDInputInverts(self): return dict(self.freed_input_inverts)
+    @Property('QVariantMap', notify=configChanged)
+    def freeDOutputOffsets(self): return dict(self.freed_output_offsets)
+    @Property('QVariantMap', notify=configChanged)
+    def freeDOutputInverts(self): return dict(self.freed_output_inverts)
+    @Property(str, notify=configChanged)
+    def lensType(self): return str(self.freed_lens_type)
+    @Property(str, notify=configChanged)
+    def lensScale(self): return str(self.freed_lens_scale_mode)
+    @Property('QVariantMap', notify=configChanged)
+    def lensCalibration(self): return dict(self.freed_lens_cal)
+    @Property(float, notify=configChanged)
+    def staticWeightValue(self): return self._kg_to_lb(self.static_weight_kg) if self.static_weight_unit == "lbs" else float(self.static_weight_kg)
+    @Property(str, notify=configChanged)
+    def staticWeightUnit(self): return str(self.static_weight_unit)
+    @Property(float, notify=configChanged)
+    def cableWeightValue(self): return self._kg_to_lb(self.cable_weight_kg100m) if self.cable_weight_unit == "lbs/100m" else float(self.cable_weight_kg100m)
+    @Property(str, notify=configChanged)
+    def cableWeightUnit(self): return str(self.cable_weight_unit)
+    @Property(float, notify=configChanged)
+    def cableTensionValue(self): return self._kg_to_lb(self.cable_tension_kg) if self.cable_tension_unit == "lbs" else float(self.cable_tension_kg)
+    @Property(str, notify=configChanged)
+    def cableTensionUnit(self): return str(self.cable_tension_unit)
+    @Property(str, notify=configChanged)
+    def highlineMode(self): return str(self.highline_mode)
     @Property(str, notify=logChanged)
     def logText(self):
         with self._lock: return "\n".join(self._logs)
@@ -951,6 +1275,10 @@ class HVP2PBackend(QObject):
     def uptime(self):
         s=int(time.time()-self.started); return f"{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}"
 
+    def _notify_config(self):
+        self.configChanged.emit()
+        self.stateChanged.emit()
+
     # --- QML actions ---
     def _position_relative_to_near(self, pos=None) -> float:
         if pos is None:
@@ -967,20 +1295,22 @@ class HVP2PBackend(QObject):
     def setPresetName(self,i,name):
         if 0 <= i < 10:
             self.preset_names[i] = str(name).strip() or f"P{i+1}"
-            self._save_config(); self.stateChanged.emit()
+            self._save_config(); self._notify_config()
 
     @Slot(int,float)
     def setPresetPosition(self,i,value):
         # User-facing preset distances are relative to the Near end of the span.
+        # Keep manually entered presets inside the current saved cable span.
         if 0 <= i < 10:
-            self.preset_positions[i] = float(value)
-            self._save_config(); self.stateChanged.emit()
+            span = max(0.0, abs(float(self.farLimit) - float(self.nearLimit)))
+            self.preset_positions[i] = max(0.0, min(span, float(value))) if span > 0 else 0.0
+            self._save_config(); self._notify_config()
 
     @Slot(int)
     def savePreset(self,i):
         if 0 <= i < 10 and self.state.pos_m is not None:
             self.preset_positions[i] = self._position_relative_to_near(self.state.pos_m)
-            self._save_config(); self.stateChanged.emit()
+            self._save_config(); self._notify_config()
 
     @Slot(int)
     def recallPreset(self,i):
@@ -992,7 +1322,7 @@ class HVP2PBackend(QObject):
     def togglePresetVisible(self,i):
         if 0 <= i < 10:
             self.preset_visible[i] = not self.preset_visible[i]
-            self._save_config(); self.stateChanged.emit()
+            self._save_config(); self._notify_config()
 
     @Slot(str)
     def saveLimit(self,which):
@@ -1006,7 +1336,7 @@ class HVP2PBackend(QObject):
             return
         lp = self._limit(which)
         lp.position_m = float(self.state.pos_m)
-        self._save_config(); self._sync_w1p_settings(); self.stateChanged.emit()
+        self._save_config(); self._sync_w1p_settings(); self._notify_config()
 
     @Slot(str)
     def recallLimit(self,which):
@@ -1025,7 +1355,7 @@ class HVP2PBackend(QObject):
         self._sync_position(target)
         self._not_calibrated = False
         self._sync_service_mode_to_winch(force=True)
-        self._save_config(); self.stateChanged.emit()
+        self._save_config(); self._notify_config()
 
     def _limit(self,which):
         w = str(which).lower()
@@ -1033,39 +1363,87 @@ class HVP2PBackend(QObject):
 
     @Slot(str,str,float)
     def setRamping(self,which,mode,value):
+        """Set a ramp value while keeping Distance and Percentage equivalent.
+
+        The physical ramp point never jumps merely because the operator changes
+        units. Both representations are maintained from the same cable span.
+        """
         lp = self._limit(which)
         if lp is self.state.ref_point:
             return
-        lp.ramp_mode = "Percentage" if str(mode).lower().startswith("percent") else "Distance"
-        if lp.ramp_mode == "Percentage":
-            lp.ramp_percentage = max(0.0, min(100.0, float(value)))
+        span = max(0.001, abs(float(self.farLimit) - float(self.nearLimit)))
+        new_mode = "Percentage" if str(mode).lower().startswith("percent") else "Distance"
+        v = max(0.0, float(value))
+        if new_mode == "Percentage":
+            pct = max(0.0, min(100.0, v))
+            lp.ramp_percentage = pct
+            lp.ramp_distance_m = span * pct / 100.0
         else:
-            lp.ramp_distance_m = max(0.0, float(value))
-        self._save_config(); self.stateChanged.emit()
+            dist = min(span, v)
+            lp.ramp_distance_m = dist
+            lp.ramp_percentage = max(0.0, min(100.0, dist * 100.0 / span))
+        lp.ramp_mode = new_mode
+        self._save_config(); self._notify_config()
+
+    @Slot(str,str)
+    def changeRampingMode(self, which, mode):
+        """Convert the existing ramp to the newly selected representation."""
+        lp = self._limit(which)
+        if lp is self.state.ref_point:
+            return
+        span = max(0.001, abs(float(self.farLimit) - float(self.nearLimit)))
+        physical_distance = self._ramp_distance(lp, span)
+        new_mode = "Percentage" if str(mode).lower().startswith("percent") else "Distance"
+        lp.ramp_distance_m = max(0.0, min(span, physical_distance))
+        lp.ramp_percentage = max(0.0, min(100.0, lp.ramp_distance_m * 100.0 / span))
+        lp.ramp_mode = new_mode
+        self._save_config(); self._notify_config()
 
     @Slot(int)
     def setDriveMode(self,i):
         self.active_drive_mode = 0 if int(i) <= 0 else 1
         self._apply_active_drive_profile(sync=True)
-        self._save_config(); self.stateChanged.emit()
+        self._save_config(); self._notify_config()
 
     @Slot(int,str)
     def renameDriveMode(self,i,name):
         if i in (0,1):
             self.drive_modes[i]["name"] = str(name).strip() or f"Mode {i+1}"
-            self._save_config(); self.stateChanged.emit()
+            self._save_config(); self._notify_config()
 
     @Slot(str)
     def setAccelerationMode(self,mode):
         self.acceleration_mode = "Power" if str(mode).lower().startswith("power") else "Speed"
-        self._sync_w1p_settings(); self._save_config(); self.stateChanged.emit()
+        self._sync_w1p_settings(); self._save_config(); self._notify_config()
 
     @Slot(bool)
     def setBatteryChange(self,on):
         self.battery_change_mode = bool(on)
         self._battery_change_went_outside_limits = False
         self._sync_service_mode_to_winch(force=True)
-        self._save_config(); self.stateChanged.emit()
+        self._save_config(); self._notify_config()
+
+    @Slot()
+    def toggleSrvrEStop(self):
+        """Toggle only the SRVR software E-stop latch from the status banner.
+
+        Other E-stop / connection / RS485 safety sources remain authoritative.
+        Engaging the SRVR latch immediately sends STOP + software Servo Enable
+        OFF. Clearing the SRVR latch restores software Servo Enable, matching
+        the proven legacy SRVR behaviour; W1P's own safety gate still prevents
+        motion until all real safety sources are healthy.
+        """
+        self._srvr_estop = not bool(self._srvr_estop)
+        self.goto_target_m = None
+        self._send_velocity(0.0, force=True)
+        if not self.smoke_test:
+            try:
+                self.w1p.send("STOP")
+                self.w1p.send("SW_SRVON 0" if self._srvr_estop else "SW_SRVON 1")
+            except Exception:
+                pass
+        self._log("[SRVR E-Stop] " + ("ACTIVE" if self._srvr_estop else "CLEAR"))
+        self.stateChanged.emit()
 
     @Slot()
     def openLimitCalibration(self):
@@ -1152,7 +1530,7 @@ class HVP2PBackend(QObject):
             else:
                 self.calibration_open = False
                 self._sync_service_mode_to_winch(force=True)
-        self.calibrationChanged.emit(); self.stateChanged.emit()
+        self.calibrationChanged.emit(); self.configChanged.emit(); self.stateChanged.emit()
 
     @Slot()
     def calibrationBack(self):
@@ -1172,7 +1550,7 @@ class HVP2PBackend(QObject):
         elif which == "W1P":
             self.w1p_ip = str(value).strip()
             self.w1p.reconfigure(self.w1p_ip,self.w1p_port)
-        self._save_config(); self.stateChanged.emit()
+        self._save_config(); self._notify_config()
 
     @Slot(str,bool)
     def setDirection(self,which,inverted):
@@ -1181,12 +1559,131 @@ class HVP2PBackend(QObject):
         elif which == "W1P":
             self.reverse_motor = bool(inverted)
             self._sync_w1p_settings()
-        self._save_config(); self.stateChanged.emit()
+        self._save_config(); self._notify_config()
 
     @Slot(float)
     def setUnitsPerM(self,v):
         self.winch_units_per_m = max(1.0,float(v))
-        self._sync_w1p_settings(); self._save_config(); self.stateChanged.emit()
+        self._sync_w1p_settings(); self._save_config(); self._notify_config()
+
+    @Slot(str,bool)
+    def setFreeDEnabled(self, which, enabled):
+        if str(which).lower().startswith("in"):
+            self.freed_input_enabled = bool(enabled)
+        else:
+            self.freed_output_enabled = bool(enabled)
+        self._notify_config()
+
+    @Slot(str,str,str)
+    def setFreeDNetwork(self, which, field, value):
+        which = str(which).lower()
+        field = str(field).lower()
+        try:
+            if which.startswith("in"):
+                if field == "ip": self.freed_input_bind_ip = str(value).strip() or "0.0.0.0"
+                elif field == "port": self.freed_input_port = max(1, min(65535, int(float(value))))
+            else:
+                if field == "ip": self.freed_target_ip = str(value).strip()
+                elif field == "port": self.freed_target_port = max(1, min(65535, int(float(value))))
+                elif field in ("fps","rate"): self.freed_rate_hz = max(1.0, min(100.0, float(value)))
+        except Exception as exc:
+            self._log(f"[Free-D] invalid {which} {field}: {value} ({exc})")
+        self._notify_config()
+
+    @Slot(str,str,float)
+    def setFreeDOffset(self, side, axis, value):
+        axis = str(axis).upper() if str(side).lower().startswith("out") else str(axis).title()
+        if str(side).lower().startswith("in") and axis in ("Pan","Tilt","Roll"):
+            self.freed_input_offsets[axis] = float(value)
+        elif axis in ("X","Y","Z"):
+            self.freed_output_offsets[axis] = float(value)
+        self._notify_config()
+
+    @Slot(str,str,bool)
+    def setFreeDInvert(self, side, axis, enabled):
+        axis = str(axis).upper() if str(side).lower().startswith("out") else str(axis).title()
+        if str(side).lower().startswith("in") and axis in ("Pan","Tilt","Roll","Zoom","Focus"):
+            self.freed_input_inverts[axis] = bool(enabled)
+        elif axis in ("X","Y","Z"):
+            self.freed_output_inverts[axis] = bool(enabled)
+        self._notify_config()
+
+    @Slot(int,str,float)
+    def setGeometryPoint(self, index, axis, value):
+        i = int(index); axis = str(axis).lower()
+        if not 0 <= i < 5 or axis not in ("x","y","z"):
+            return
+        if axis == "z" and i not in (0,4):
+            return
+        self.geometry[i][axis] = float(value)
+        self._notify_config()
+
+    @Slot(str,float)
+    def setWeightValue(self, which, value):
+        which = str(which).lower(); v = max(0.0, float(value))
+        if which.startswith("static"):
+            self.static_weight_kg = self._lb_to_kg(v) if self.static_weight_unit == "lbs" else v
+        elif which.startswith("cable"):
+            self.cable_weight_kg100m = self._lb_to_kg(v) if self.cable_weight_unit == "lbs/100m" else v
+        elif which.startswith("tension"):
+            kg = self._lb_to_kg(v) if self.cable_tension_unit == "lbs" else v
+            self.cable_tension_kg = max(0.01, kg)
+        self._notify_config()
+
+    @Slot(str,str)
+    def setWeightUnit(self, which, unit):
+        which = str(which).lower(); unit = str(unit)
+        if which.startswith("static"):
+            self.static_weight_unit = "lbs" if unit.lower().startswith("lb") else "kg"
+        elif which.startswith("cable"):
+            self.cable_weight_unit = "lbs/100m" if unit.lower().startswith("lb") else "kg/100m"
+        elif which.startswith("tension"):
+            self.cable_tension_unit = "lbs" if unit.lower().startswith("lb") else "kg"
+        # Canonical kg values are unchanged; only the displayed representation changes.
+        self._notify_config()
+
+    @Slot(str)
+    def setHighlineMode(self, mode):
+        self.highline_mode = "Dual Highline" if str(mode).lower().startswith("dual") else "Single Highline"
+        self._notify_config()
+
+    @Slot(str,float)
+    def setLensCalibration(self, which, value):
+        key = str(which)
+        if key in self.freed_lens_cal:
+            self.freed_lens_cal[key] = float(value)
+            self._notify_config()
+
+    @Slot()
+    def applyFreeDSettings(self):
+        """Commit the staged Free-D page and restart the input listener if needed."""
+        self._save_config(include_staged_freed=True)
+        self._saved_freed_snapshot = self._freed_snapshot()
+        if not self.smoke_test:
+            self._start_freed_input()
+        self._log("[Free-D] settings applied")
+        self._notify_config()
+
+    @Slot()
+    def resetFreeDSettings(self):
+        """Discard un-applied Free-D edits and restore the last applied/saved values."""
+        self._restore_freed_snapshot(dict(self._saved_freed_snapshot))
+        self._log("[Free-D] staged edits reset")
+        self._notify_config()
+
+    @Slot(result=str)
+    def saveLog(self):
+        try:
+            log_dir = self._config_path.parent / "Logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            path = log_dir / ("HV_P2P_SRVR_Log_" + time.strftime("%Y%m%d_%H%M%S") + ".txt")
+            with self._lock:
+                path.write_text("\n".join(self._logs) + "\n", encoding="utf-8")
+            self._log(f"[SRVR] Log saved: {path}")
+            return str(path)
+        except Exception as exc:
+            self._log(f"[SRVR] Log save failed: {exc}")
+            return ""
 
     @Slot()
     def clearLog(self):
@@ -1199,21 +1696,19 @@ class HVP2PBackend(QObject):
         t = str(t)
         if t in ("i16","u16","i24","u24"):
             self.freed_lens_type = t
-            self._save_config(); self.stateChanged.emit()
+            self._notify_config()
 
     @Slot(str)
     def setLensScale(self,s):
-        s = str(s)
-        if s in ("Auto","Manual","Full Scale"):
-            self.freed_lens_scale_mode = s
-            self._save_config(); self.stateChanged.emit()
+        self.freed_lens_scale_mode = self._normalise_lens_scale(s)
+        self._notify_config()
 
     @Slot(str,float)
     def captureLens(self,which,value):
         key = str(which)
         if key in self.freed_lens_cal:
             self.freed_lens_cal[key] = float(value)
-            self._save_config(); self.stateChanged.emit()
+            self._notify_config()
 
     @Slot()
     def shutdown(self):

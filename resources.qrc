@@ -5,9 +5,12 @@
     <file>qml/components/HVButton.qml</file>
     <file>qml/components/HVTab.qml</file>
     <file>qml/components/HVField.qml</file>
+    <file>qml/components/HVReadout.qml</file>
+    <file>qml/components/HVCheck.qml</file>
     <file>qml/components/HVCombo.qml</file>
     <file>qml/components/StatusDot.qml</file>
     <file>qml/components/ConnectionCard.qml</file>
     <file>qml/components/SpanDiagram.qml</file>
+    <file>qml/components/FreeDGeometryDiagram.qml</file>
   </qresource>
 </RCC>

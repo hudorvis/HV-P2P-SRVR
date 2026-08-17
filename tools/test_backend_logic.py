@@ -28,7 +28,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.07", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.08", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -81,6 +81,157 @@ try:
     assert abs(b.preset_positions[0] - 25.0) < 1e-9
     b.recallPreset(0)
     assert b.goto_target_m is not None and abs(b.goto_target_m - 35.0) < 1e-9
+
+    # Operator-editable Run fields persist through the backend interface.
+    b.setPresetName(0, "Wide Establish")
+    assert b.preset_names[0] == "Wide Establish"
+    b.setPresetPosition(0, 22.25)
+    assert abs(b.preset_positions[0] - 22.25) < 1e-9
+    b.setPresetPosition(0, 1234.0)
+    assert abs(b.preset_positions[0] - 100.0) < 1e-9, "manual preset escaped cable span"
+    b.setPresetPosition(0, 22.25)
+    b.renameDriveMode(0, "Camera Move")
+    b.renameDriveMode(1, "Cable Move")
+    assert b.drive_modes[0]["name"] == "Camera Move"
+    assert b.drive_modes[1]["name"] == "Cable Move"
+
+    # Setup/System edit controls are real backend writes, not display-only fields.
+    b.setNetwork("CTRL", "172.20.1.111")
+    b.setNetwork("W1P", "172.20.1.112")
+    b.setDirection("CTRL", True)
+    b.setDirection("W1P", True)
+    b.setUnitsPerM(22000.5)
+    b.setAccelerationMode("Power")
+    b.setDriveMode(1)
+    assert b.ctrlIp == "172.20.1.111" and b.w1pIp == "172.20.1.112"
+    assert b.ctrlInverted and b.w1pInverted
+    assert abs(b.unitsPerM - 22000.5) < 1e-9
+    assert b.accelerationMode == "Power" and b.activeDriveMode == 1
+
+    old_vis = bool(b.preset_visible[0])
+    b.togglePresetVisible(0)
+    assert bool(b.preset_visible[0]) is (not old_vis)
+    b.togglePresetVisible(0)
+    b.state.pos_m = 5.0
+    b.saveLimit("Near")
+    assert abs(float(b.state.near_limit.position_m) - 5.0) < 1e-9
+    b.state.pos_m = 105.0
+    b.saveLimit("Far")
+    assert abs(float(b.state.far_limit.position_m) - 105.0) < 1e-9
+    b.state.pos_m = 55.0
+    b.saveLimit("Ref")
+    assert abs(float(b.state.ref_point.position_m) - 55.0) < 1e-9
+    b.recallLimit("Ref")
+    assert b.goto_target_m is not None
+
+    # Ramping mode changes must convert the existing physical ramp instead of
+    # reinterpreting the numeric value. 20 m on a 100 m span == 20%.
+    b.state.near_limit.position_m = 0.0
+    b.state.far_limit.position_m = 100.0
+    b.setRamping("Near", "Distance", 20.0)
+    assert abs(b.state.near_limit.ramp_distance_m - 20.0) < 1e-9
+    b.changeRampingMode("Near", "Percentage")
+    assert b.state.near_limit.ramp_mode == "Percentage"
+    assert abs(b.nearRampValue - 20.0) < 1e-9
+    b.setRamping("Near", "Percentage", 35.0)
+    assert abs(b.state.near_limit.ramp_distance_m - 35.0) < 1e-9
+    b.changeRampingMode("Near", "Distance")
+    assert b.state.near_limit.ramp_mode == "Distance"
+    assert abs(b.nearRampValue - 35.0) < 1e-9
+
+    # Free-D staged page editing: unit changes convert display only, editable
+    # values are interpreted in the selected unit, and Reset restores Apply.
+    b.static_weight_kg = 25.0
+    b.setWeightUnit("Static", "lbs")
+    assert abs(b.staticWeightValue - 55.1155655) < 1e-4
+    b.setWeightValue("Static", 44.0924524)
+    assert abs(b.static_weight_kg - 20.0) < 1e-4
+    b.setWeightUnit("Static", "kg")
+    assert abs(b.staticWeightValue - 20.0) < 1e-4
+
+    b.setFreeDEnabled("Input", True)
+    b.setFreeDEnabled("Output", True)
+    b.setFreeDNetwork("Input", "IP", "0.0.0.0")
+    b.setFreeDNetwork("Input", "Port", "5001")
+    b.setHighlineMode("Dual Highline")
+    b.setWeightUnit("Cable", "lbs/100m")
+    b.setWeightValue("Cable", b._kg_to_lb(4.5))
+    b.setWeightUnit("Cable", "kg/100m")
+    b.setWeightUnit("Tension", "lbs")
+    b.setWeightValue("Tension", b._kg_to_lb(100.0))
+    b.setWeightUnit("Tension", "kg")
+    assert b.freeDInputEnabled is True and b.freeDOutputEnabled is True
+    assert b.freeDInputPort == 5001 and b.highlineMode == "Dual Highline"
+    assert abs(b.cableWeightValue - 4.5) < 1e-4
+    assert abs(b.cableTensionValue - 100.0) < 1e-4
+
+    # Static camera-package weight and Single/Dual Highline must materially
+    # affect the Free-D sag calculation; these fields must not be decorative.
+    b.state.near_limit.position_m = 0.0
+    b.state.far_limit.position_m = 100.0
+    b.state.pos_m = 50.0
+    for idx, x in enumerate((0.0,25.0,50.0,75.0,100.0)):
+        b.setGeometryPoint(idx, "x", x)
+        b.setGeometryPoint(idx, "y", 0.0)
+    b.cable_weight_kg100m = 0.0
+    b.cable_tension_kg = 100.0
+    b.static_weight_kg = 20.0
+    b.highline_mode = "Single Highline"
+    single_y = b._xyz()[1]
+    b.highline_mode = "Dual Highline"
+    dual_y = b._xyz()[1]
+    assert single_y < dual_y < 0.0, (single_y, dual_y)
+    assert abs(single_y + 5.0) < 1e-6 and abs(dual_y + 2.5) < 1e-6
+    # Restore the requested nominal values for the staged Apply test.
+    b.cable_weight_kg100m = 4.5
+    b.cable_tension_kg = 100.0
+    b.static_weight_kg = 20.0
+    b.highline_mode = "Dual Highline"
+
+    b.setFreeDNetwork("Output", "IP", "172.20.1.30")
+    b.setFreeDNetwork("Output", "Port", "5002")
+    b.setFreeDNetwork("Output", "FPS", "50")
+    b.setFreeDOffset("Output", "X", 1.25)
+    b.setFreeDInvert("Output", "Y", True)
+    b.setFreeDOffset("Input", "Pan", -2.5)
+    b.setFreeDInvert("Input", "Zoom", True)
+    b.setGeometryPoint(1, "x", 26.0)
+    b.setGeometryPoint(1, "y", 6.0)
+    old_p2_z = b.geometry[1]["z"]
+    b.setGeometryPoint(1, "z", 99.0)
+    assert b.geometry[1]["z"] == old_p2_z is None, "P2 Z must remain disabled"
+    b.setLensType("i24")
+    b.setLensScale("Manual")
+    b.setLensCalibration("zoom_wide", -100.0)
+    b.captureLens("zoom_tele", 1000.0)
+    b.applyFreeDSettings()
+    assert b.freeDOutputIp == "172.20.1.30" and b.freeDOutputPort == 5002
+    assert abs(b.freeDOutputRate - 50.0) < 1e-9
+    assert abs(b.freeDOutputOffsets["X"] - 1.25) < 1e-9
+    assert b.freeDOutputInverts["Y"] is True
+    assert abs(b.freeDInputOffsets["Pan"] + 2.5) < 1e-9
+    assert b.freeDInputInverts["Zoom"] is True
+    assert b.lensType == "i24" and b.lensScale == "Manual"
+
+    b.setFreeDNetwork("Output", "IP", "10.0.0.99")
+    b.setWeightValue("Static", 99.0)
+    # An unrelated config save must not accidentally commit staged Free-D edits.
+    b.setPresetName(1, "Unrelated Save")
+    import json
+    saved = json.loads(b._config_path.read_text())
+    assert saved["free_d"]["target_ip"] == "172.20.1.30"
+    assert abs(float(saved["free_d"]["static_weight_kg"]) - 20.0) < 1e-4
+    b.resetFreeDSettings()
+    assert b.freeDOutputIp == "172.20.1.30", "Free-D Reset did not restore last Apply"
+    assert abs(b.staticWeightValue - 20.0) < 1e-4
+
+    # SRVR status banner E-stop toggles only the software latch and leaves
+    # other safety sources to the normal safety aggregation.
+    b._srvr_estop = False
+    b.toggleSrvrEStop()
+    assert b._srvr_estop is True
+    b.toggleSrvrEStop()
+    assert b._srvr_estop is False
 
     # Slip re-references to the known saved physical point and clears the
     # startup Not-Calibrated service state.
