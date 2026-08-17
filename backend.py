@@ -133,7 +133,7 @@ class HVP2PBackend(QObject):
     logChanged = Signal()
     calibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.08", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.09", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
@@ -674,13 +674,155 @@ class HVP2PBackend(QObject):
     def _decode_lens(self, u24):
         return self._decode_lens_for_type(u24, self.freed_lens_type)
 
-    def _xyz(self, snap=None):
-        """Calculate Free-D X/Y/Z from either staged or applied settings.
+    @staticmethod
+    def _normalised_geometry(geometry):
+        """Return sorted, de-duplicated geometry points with numeric X/Y/Z values."""
+        pts = []
+        for raw in list(geometry or []):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                x = float(raw.get("x", 0.0))
+                y = float(raw.get("y", 0.0))
+            except Exception:
+                continue
+            z_raw = raw.get("z", None)
+            try:
+                z = None if z_raw is None else float(z_raw)
+            except Exception:
+                z = None
+            pts.append({"x": x, "y": y, "z": z, "name": str(raw.get("name", ""))})
+        pts.sort(key=lambda p: p["x"])
+        dedup = []
+        for point in pts:
+            if dedup and abs(point["x"] - dedup[-1]["x"]) < 1e-9:
+                dedup[-1] = point
+            else:
+                dedup.append(point)
+        return dedup
 
-        Y uses the whole-span sag model from the proven backend: uniform cable
-        self-weight plus the suspended camera package as a point load. Dual
-        Highline shares the package load between two lines.
+    @classmethod
+    def _smooth_geometry_y(cls, x, geometry):
+        """Smooth C1 reference-height interpolation through P1..P5.
+
+        The geometry points are operator-entered reference heights, not straight
+        cable segments.  A cubic Hermite interpolation creates a smooth reference
+        profile, then the physical whole-span sag model is applied separately.
         """
+        pts = cls._normalised_geometry(geometry)
+        if not pts:
+            return 0.0
+        if len(pts) == 1:
+            return float(pts[0]["y"])
+        xv = float(x)
+        if xv <= pts[0]["x"]:
+            return float(pts[0]["y"])
+        if xv >= pts[-1]["x"]:
+            return float(pts[-1]["y"])
+
+        # Finite-difference tangents for a smooth, continuous curve.
+        slopes = []
+        for i, p in enumerate(pts):
+            if i == 0:
+                dx = max(1e-9, pts[1]["x"] - p["x"])
+                slopes.append((pts[1]["y"] - p["y"]) / dx)
+            elif i == len(pts) - 1:
+                dx = max(1e-9, p["x"] - pts[i-1]["x"])
+                slopes.append((p["y"] - pts[i-1]["y"]) / dx)
+            else:
+                dx = max(1e-9, pts[i+1]["x"] - pts[i-1]["x"])
+                slopes.append((pts[i+1]["y"] - pts[i-1]["y"]) / dx)
+
+        for i in range(len(pts) - 1):
+            p0, p1 = pts[i], pts[i+1]
+            if p0["x"] <= xv <= p1["x"]:
+                h = max(1e-9, p1["x"] - p0["x"])
+                t = max(0.0, min(1.0, (xv - p0["x"]) / h))
+                t2, t3 = t*t, t*t*t
+                h00 = 2*t3 - 3*t2 + 1
+                h10 = t3 - 2*t2 + t
+                h01 = -2*t3 + 3*t2
+                h11 = t3 - t2
+                return (h00*p0["y"] + h10*h*slopes[i] +
+                        h01*p1["y"] + h11*h*slopes[i+1])
+        return float(pts[-1]["y"])
+
+    @classmethod
+    def _geometry_z(cls, x, geometry):
+        """Top-view Z uses only P1 and P5, with P2..P4 lying on that line."""
+        pts = cls._normalised_geometry(geometry)
+        if not pts:
+            return 0.0
+        p0, p1 = pts[0], pts[-1]
+        z0 = float(p0["z"] or 0.0)
+        z1 = float(p1["z"] or 0.0)
+        span = max(1e-9, p1["x"] - p0["x"])
+        t = max(0.0, min(1.0, (float(x) - p0["x"]) / span))
+        return z0 + (z1-z0)*t
+
+    def _cable_y_at(self, x, geometry, cable_weight, tension, static_weight, highline, skate_x):
+        """Physical side-view cable height at X.
+
+        The curve is the smooth operator-entered reference geometry minus:
+        1) whole-span uniform cable self-weight sag, and
+        2) the live skate/package point-load deflection.
+        This is the same model used by the Free-D output and both UI diagrams.
+        """
+        pts = self._normalised_geometry(geometry)
+        if len(pts) < 2:
+            return self._smooth_geometry_y(x, pts)
+        support0, support1 = pts[0]["x"], pts[-1]["x"]
+        span = max(0.1, support1-support0)
+        xv = max(support0, min(support1, float(x)))
+        rel_x = xv-support0
+        left = rel_x
+        right = span-rel_x
+
+        rope_kg_m = max(0.0, float(cable_weight))/100.0
+        tension_per_line = max(0.01, float(tension))
+        line_count = 2.0 if str(highline).strip().lower().startswith("dual") else 1.0
+        skate_per_line = max(0.0, float(static_weight))/line_count
+
+        # Uniform cable load: continuous parabola with zero drop at both ends.
+        cable_drop = (rope_kg_m * left * right) / (2.0 * tension_per_line)
+
+        # Point load at the LIVE skate position.  This is piecewise-linear in
+        # horizontal-tension approximation and remains continuous at the skate.
+        a = max(0.0, min(span, float(skate_x)-support0))
+        if rel_x <= a:
+            point_drop = (skate_per_line * rel_x * (span-a)) / (tension_per_line * span)
+        else:
+            point_drop = (skate_per_line * a * (span-rel_x)) / (tension_per_line * span)
+
+        return self._smooth_geometry_y(xv, pts) - max(0.0, cable_drop + point_drop)
+
+    def _cable_profile(self, snap=None, samples=121):
+        """Return the single canonical cable profile used by Run and Free-D."""
+        cfg = snap if isinstance(snap, dict) else None
+        geometry = [dict(p) for p in (cfg.get("geometry", self.geometry) if cfg else self.geometry)]
+        cable_weight = float(cfg.get("cable_weight_kg100m", self.cable_weight_kg100m) if cfg else self.cable_weight_kg100m)
+        tension = float(cfg.get("cable_tension_kg", self.cable_tension_kg) if cfg else self.cable_tension_kg)
+        static_weight = float(cfg.get("static_weight_kg", self.static_weight_kg) if cfg else self.static_weight_kg)
+        highline = str(cfg.get("highline_mode", self.highline_mode) if cfg else self.highline_mode)
+        pts = self._normalised_geometry(geometry)
+        if len(pts) < 2:
+            return []
+        x0, x1 = pts[0]["x"], pts[-1]["x"]
+        span = max(0.1, x1-x0)
+        skate_x = float(self.state.pos_m or 0.0) - float(self.state.near_limit.position_m or 0.0)
+        count = max(16, int(samples))
+        result = []
+        for i in range(count):
+            x = x0 + span * i / max(1, count-1)
+            result.append({
+                "x": float(x),
+                "y": float(self._cable_y_at(x, pts, cable_weight, tension, static_weight, highline, skate_x)),
+                "z": float(self._geometry_z(x, pts)),
+            })
+        return result
+
+    def _xyz(self, snap=None):
+        """Calculate Free-D X/Y/Z from the same physical profile shown in the UI."""
         cfg = snap if isinstance(snap, dict) else None
         geometry = [dict(p) for p in (cfg.get("geometry", self.geometry) if cfg else self.geometry)]
         output_offsets = dict(cfg.get("output_offsets", self.freed_output_offsets) if cfg else self.freed_output_offsets)
@@ -690,37 +832,11 @@ class HVP2PBackend(QObject):
         highline = str(cfg.get("highline_mode", self.highline_mode) if cfg else self.highline_mode)
 
         x = float(self.state.pos_m or 0.0) - float(self.state.near_limit.position_m or 0.0)
-        pts = [(float(p["x"]), float(p["y"])) for p in geometry]
-        pts.sort()
-        base_y = pts[0][1]
-        if x <= pts[0][0]:
-            base_y = pts[0][1]
-        elif x >= pts[-1][0]:
-            base_y = pts[-1][1]
-        else:
-            for (x0,y0),(x1,y1) in zip(pts[:-1],pts[1:]):
-                if x0 <= x <= x1:
-                    t = (x-x0)/max(1e-9,x1-x0)
-                    base_y = y0+(y1-y0)*t
-                    break
-
-        support0, support1 = pts[0][0], pts[-1][0]
-        span = max(0.1, support1-support0)
-        clamped_x = max(support0, min(support1, x))
-        left = max(0.0, clamped_x-support0)
-        right = max(0.0, support1-clamped_x)
-        rope_kg_m = max(0.0, cable_weight)/100.0
-        tension_per_line = max(1.0, tension)
-        line_count = 2.0 if highline.strip().lower().startswith("dual") else 1.0
-        skate_per_line = max(0.0, static_weight)/line_count
-        cable_drop = (rope_kg_m * left * right) / (2.0 * tension_per_line)
-        point_drop = (skate_per_line * left * right) / (tension_per_line * span)
-        y = base_y - max(0.0, cable_drop + point_drop)
-
-        z0 = float(geometry[0].get("z") or 0.0)
-        z1 = float(geometry[-1].get("z") or 0.0)
-        rel = max(0.0, min(span, clamped_x-support0))
-        z = z0 + (z1-z0)*(rel/span)
+        pts = self._normalised_geometry(geometry)
+        if len(pts) >= 2:
+            x = max(pts[0]["x"], min(pts[-1]["x"], x))
+        y = self._cable_y_at(x, pts, cable_weight, tension, static_weight, highline, x)
+        z = self._geometry_z(x, pts)
         return (
             x + float(output_offsets.get("X",0.0)),
             y + float(output_offsets.get("Y",0.0)),
@@ -1114,19 +1230,33 @@ class HVP2PBackend(QObject):
     def systemReady(self): return not self.state.estop_active
     @Property(str, notify=stateChanged)
     def bannerText(self):
-        if not self.state.estop_active: return "SYSTEM READY"
-        parts=[]
-        if self._srvr_estop: parts.append("SRVR")
-        if self._ctrl_estop: parts.append("CTRL")
-        if self._w1p_estop: parts.append("W1P")
-        if self._ctrl_flags & FLAG_ADS1115_FAULT: parts.append("ADS1115")
-        if not self._ctrl_connected(): parts.append("CTRL")
-        if not self.w1p.connected: parts.append("W1P")
-        if self.winch_rs_status!="Connected": parts.append("RS485")
-        uniq=[]
-        for p in parts:
-            if p not in uniq: uniq.append(p)
-        return "E-STOP | " + (" & ".join(uniq) if uniq else "SRVR")
+        if not self.state.estop_active:
+            return "SYSTEM READY"
+
+        # Operator-facing source names are intentionally limited to the three
+        # system nodes used everywhere else in the SRVR UI.  A CTRL hardware
+        # fault (including ADS1115) is reported as CTRL; a W1P/RS485 fault is
+        # reported as W1P.  Do not expose lower-level RS485/ADS implementation
+        # names in the top safety banner.
+        ctrl_fault = bool(
+            self._ctrl_estop
+            or (self._ctrl_flags & FLAG_ADS1115_FAULT)
+            or (not self._ctrl_connected())
+        )
+        w1p_fault = bool(
+            self._w1p_estop
+            or (not self.w1p.connected)
+            or (self.winch_rs_status != "Connected")
+        )
+
+        parts = []
+        if self._srvr_estop:
+            parts.append("SRVR")
+        if ctrl_fault:
+            parts.append("CTRL")
+        if w1p_fault:
+            parts.append("W1P")
+        return "E-Stop | " + (" & ".join(parts) if parts else "SRVR")
     @Property(float, notify=stateChanged)
     def position(self): return float(self.state.pos_m or 0.0)
     @Property(float, notify=stateChanged)
@@ -1178,6 +1308,11 @@ class HVP2PBackend(QObject):
         return [{"index":i,"label":f"P{i+1}","name":self.preset_names[i],"position":self.preset_positions[i] if self.preset_positions[i] is not None else 0.0,"set":self.preset_positions[i] is not None,"visible":self.preset_visible[i]} for i in range(10)]
     @Property('QVariantList', notify=configChanged)
     def geometryPoints(self): return self.geometry
+    @Property('QVariantList', notify=stateChanged)
+    def cableProfile(self):
+        # Staged Free-D edits are previewed immediately in BOTH diagrams.  Apply
+        # still controls what is transmitted on the live Free-D output.
+        return self._cable_profile()
     @Property('QVariantMap', notify=stateChanged)
     def freeDInput(self):
         r=self.freed_in_raw; d=self.freed_in

@@ -28,7 +28,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.08", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.09", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -165,6 +165,29 @@ try:
     assert abs(b.cableWeightValue - 4.5) < 1e-4
     assert abs(b.cableTensionValue - 100.0) < 1e-4
 
+    # The operator banner rolls all lower-level faults up to CTRL/W1P names.
+    # Connection loss to both must read exactly CTRL & W1P (no RS485/ADS text).
+    now = time.time()
+    b._srvr_estop = False
+    b._ctrl_estop = False
+    b._w1p_estop = False
+    b._ctrl_flags = 0
+    b._ctrl_rx_times.clear()
+    b.w1p.last_seen = now
+    b.winch_rs_status = "Connected"
+    b.state.estop_active = True
+    assert b.bannerText == "E-Stop | CTRL", b.bannerText
+    b._ctrl_rx_times.extend([now - 0.05, now])
+    b.w1p.last_seen = 0.0
+    assert b.bannerText == "E-Stop | W1P", b.bannerText
+    b._ctrl_rx_times.clear()
+    assert b.bannerText == "E-Stop | CTRL & W1P", b.bannerText
+    # Restore healthy links for the remaining tests.
+    now = time.time()
+    b._ctrl_rx_times.extend([now - 0.05, now])
+    b.w1p.last_seen = now
+    b.winch_rs_status = "Connected"
+
     # Static camera-package weight and Single/Dual Highline must materially
     # affect the Free-D sag calculation; these fields must not be decorative.
     b.state.near_limit.position_m = 0.0
@@ -182,6 +205,31 @@ try:
     dual_y = b._xyz()[1]
     assert single_y < dual_y < 0.0, (single_y, dual_y)
     assert abs(single_y + 5.0) < 1e-6 and abs(dual_y + 2.5) < 1e-6
+
+    # The exact SAME canonical cable profile drives Run and Free-D. Changing
+    # cable tension must immediately change the calculated side-view sag.
+    b.static_weight_kg = 0.0
+    b.cable_weight_kg100m = 4.5
+    b.highline_mode = "Single Highline"
+    b.cable_tension_kg = 50.0
+    low_tension_profile = b._cable_profile(samples=101)
+    low_mid = low_tension_profile[len(low_tension_profile)//2]["y"]
+    b.cable_tension_kg = 200.0
+    high_tension_profile = b._cable_profile(samples=101)
+    high_mid = high_tension_profile[len(high_tension_profile)//2]["y"]
+    assert low_mid < high_mid <= 0.0, (low_mid, high_mid)
+
+    # Top-view Z is a complete cable line: P2/P3/P4 lie on the P1-P5
+    # interpolation even though those intermediate Z fields are intentionally disabled.
+    b.geometry[0]["z"] = 1.0
+    b.geometry[4]["z"] = 5.0
+    z_profile = b._cable_profile(samples=17)
+    assert len(z_profile) >= 17
+    assert abs(z_profile[0]["z"] - 1.0) < 1e-9
+    assert abs(z_profile[len(z_profile)//2]["z"] - 3.0) < 1e-9
+    assert abs(z_profile[-1]["z"] - 5.0) < 1e-9
+    b.geometry[0]["z"] = 0.0
+    b.geometry[4]["z"] = 0.0
     # Restore the requested nominal values for the staged Apply test.
     b.cable_weight_kg100m = 4.5
     b.cable_tension_kg = 100.0

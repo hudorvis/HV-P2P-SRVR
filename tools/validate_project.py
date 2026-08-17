@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.08"
+VERSION = "26.08.17.09"
 ERRORS: list[str] = []
 
 
@@ -150,8 +150,10 @@ require('model:["Cam ID","Pan","Tilt","Roll","Zoom","Focus","FPS"]' in qml_main,
         "Free-D Input seven-row table is incomplete")
 require('model:["X","Y","Z","FPS"]' in qml_main,
         "Free-D Output four-row table is incomplete")
-require("HVReadout.qml" in qrc_text and "HVCheck.qml" in qrc_text and "FreeDGeometryDiagram.qml" in qrc_text,
-        "new deterministic Qt Quick components are missing from resources.qrc")
+require("HVReadout.qml" in qrc_text and "HVCheck.qml" in qrc_text and "SpanDiagram.qml" in qrc_text,
+        "required deterministic Qt Quick components are missing from resources.qrc")
+require("FreeDGeometryDiagram" not in qml_main and "FreeDGeometryDiagram.qml" not in qrc_text,
+        "Run and Free-D must use the same SpanDiagram component")
 require("@Property('QVariantList', notify=configChanged)" in backend,
         "editable list models still use the fast telemetry signal")
 require("self._saved_freed_snapshot" in backend and "resetFreeDSettings" in backend,
@@ -162,6 +164,35 @@ require("skate_per_line" in backend and "point_drop" in backend and "highline_mo
         "Static Weight / Dual Highline sag model is not active in Free-D calculation")
 require('getattr(self, "_saved_freed_snapshot"' in backend and 'def _send_freed' in backend,
         "live Free-D output is not using the last-applied settings snapshot")
+
+# Requested v09 fixes: preset tab commit isolation, one shared calculated cable
+# profile, simplified safety source naming, and fully visible cable-weight unit.
+span_qml = read("qml/components/SpanDiagram.qml")
+require('property int pi:index+(window.shortcutTab' not in qml_main,
+        "preset delegate index still changes when switching Shortcuts tabs")
+require('property int pi:index' in qml_main and 'property int pi:index+5' in qml_main,
+        "Preset 1-5 and Preset 6-10 do not have fixed delegate indices")
+require(qml_main.count('cableProfile:backend.cableProfile') >= 4,
+        "Run and Free-D are not all using the same calculated cable profile")
+require(qml_main.count('showGeometryPoints:true') >= 2 and qml_main.count('showPresets:true') >= 2,
+        "Run/Free-D marker overlays are not separated correctly")
+require('property var cableProfile' in span_qml and 'Canonical calculated cable line' in span_qml,
+        "shared SpanDiagram calculated profile rendering is missing")
+require('c.moveTo(sx,sy+8)' not in span_qml and 'fov' not in span_qml.lower(),
+        "Run diagram still contains camera/FOV guide drawing")
+require('def _cable_profile' in backend and 'def _cable_y_at' in backend and 'def _smooth_geometry_y' in backend,
+        "canonical smooth cable sag model is missing from backend")
+require('def cableProfile' in backend, "QML cableProfile property missing")
+require('or (self.winch_rs_status != "Connected")' in backend and 'parts.append("W1P")' in backend,
+        "RS485/W1P failures are not rolled up to W1P in the operator banner")
+require('parts.append("RS485")' not in backend and 'parts.append("ADS1115")' not in backend,
+        "low-level RS485/ADS1115 names leaked back into top E-stop banner")
+require('model:["kg/100m","lbs/100m"]' in qml_main and 'width:f(108)' in qml_main,
+        "Cable Weight kg/100m unit control is missing or too narrow")
+require('onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Tension",n)}' in qml_main,
+        "Cable Tension does not live-preview the calculated sag while editing")
+require('editCommitSink.forceActiveFocus()' in qml_main and 'function changeShortcutTab' in qml_main,
+        "page/tab changes do not explicitly commit the active editor first")
 
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.

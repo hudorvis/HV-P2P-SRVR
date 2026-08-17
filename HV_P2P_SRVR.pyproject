@@ -13,7 +13,6 @@
     "qml/components/ConnectionCard.qml",
     "qml/components/SpanDiagram.qml",
     "qml/components/HVReadout.qml",
-    "qml/components/HVCheck.qml",
-    "qml/components/FreeDGeometryDiagram.qml"
+    "qml/components/HVCheck.qml"
   ]
 }

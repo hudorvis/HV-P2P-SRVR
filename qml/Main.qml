@@ -27,10 +27,23 @@ ApplicationWindow {
     property real s: Math.min(width/1672, height/941)
 
     function f(v) { return Math.max(1, v*s) }
+    function changePage(i) {
+        // Force any active HVField to commit BEFORE its page is hidden.
+        editCommitSink.forceActiveFocus()
+        page = i
+    }
+    function changeShortcutTab(i) {
+        // This is deliberately ordered: focus loss commits the old tab's field
+        // before shortcutTab changes, preventing cross-tab preset writes.
+        editCommitSink.forceActiveFocus()
+        shortcutTab = i
+    }
     function indexOfValue(list, value) {
         for (var i=0; i<list.length; ++i) if (String(list[i]) === String(value)) return i
         return 0
     }
+
+    Item { id: editCommitSink; width: 0; height: 0; x: -10; y: -10 }
 
     Column {
         anchors.fill: parent
@@ -78,7 +91,7 @@ ApplicationWindow {
                         Rectangle { visible:window.page===index; anchors.left:parent.left; anchors.right:parent.right; anchors.bottom:parent.bottom; height:f(2); color:"#d6dad8" }
                         Rectangle { visible:index>0; width:1; height:parent.height-f(10); anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; color:"#3c4246" }
                         Text { anchors.centerIn:parent; text:modelData; color:fg; font.pixelSize:f(17) }
-                        MouseArea { id:navMouse; anchors.fill:parent; hoverEnabled:true; cursorShape:Qt.PointingHandCursor; onClicked:window.page=index }
+                        MouseArea { id:navMouse; anchors.fill:parent; hoverEnabled:true; cursorShape:Qt.PointingHandCursor; onClicked:window.changePage(index) }
                     }
                 }
             }
@@ -93,8 +106,10 @@ ApplicationWindow {
                 anchors.fill:parent; visible:window.page===0
                 Column {
                     anchors.fill:parent; spacing:f(8)
-                    Panel { width:parent.width; height:(parent.height-f(16)-f(252))*0.50; SpanDiagram { anchors.fill:parent; title:"Top View"; subtitle:"X (Tracking) / Z (Offset)"; currentPosition:backend.position; nearLimit:backend.nearLimit; farLimit:backend.farLimit; refPoint:backend.refPoint; presets:backend.presets; nearRamp:backend.nearRampDistance; farRamp:backend.farRampDistance } }
-                    Panel { width:parent.width; height:(parent.height-f(16)-f(252))*0.50; SpanDiagram { anchors.fill:parent; title:"Side View"; subtitle:"X (Tracking) / Y (Sag)"; sideView:true; currentPosition:backend.position; nearLimit:backend.nearLimit; farLimit:backend.farLimit; refPoint:backend.refPoint; presets:backend.presets; nearRamp:backend.nearRampDistance; farRamp:backend.farRampDistance } }
+                    // Run and Free-D now use the exact same calculated cable profile.
+                    // Run overlays Presets/REF/Skate; Free-D overlays P1..P5 geometry.
+                    Panel { width:parent.width; height:(parent.height-f(16)-f(252))*0.50; SpanDiagram { anchors.fill:parent; title:"Top View"; subtitle:"X (Tracking) / Z (Offset)"; cableProfile:backend.cableProfile; currentPosition:backend.position-backend.nearLimit; nearLimit:0; farLimit:backend.farLimit-backend.nearLimit; refPoint:backend.refPoint-backend.nearLimit; presets:backend.presets; showPresets:true; showGeometryPoints:false; showSkate:true; showReference:true; nearRamp:backend.nearRampDistance; farRamp:backend.farRampDistance } }
+                    Panel { width:parent.width; height:(parent.height-f(16)-f(252))*0.50; SpanDiagram { anchors.fill:parent; title:"Side View"; subtitle:"X (Tracking) / Y (Sag)"; sideView:true; cableProfile:backend.cableProfile; currentPosition:backend.position-backend.nearLimit; nearLimit:0; farLimit:backend.farLimit-backend.nearLimit; refPoint:backend.refPoint-backend.nearLimit; presets:backend.presets; showPresets:true; showGeometryPoints:false; showSkate:true; showReference:true; nearRamp:backend.nearRampDistance; farRamp:backend.farRampDistance } }
 
                     Item {
                         width:parent.width; height:f(252)
@@ -151,21 +166,41 @@ ApplicationWindow {
                                     }
                                     Row {
                                         width:parent.width; height:f(27); spacing:f(4)
-                                        Repeater { model:["Preset 1-5","Preset 6-10","Limits","System"]; HVTab { width:(parent.width-f(12))/4; height:parent.height; text:modelData; selected:window.shortcutTab===index; onClicked:window.shortcutTab=index } }
+                                        Repeater { model:["Preset 1-5","Preset 6-10","Limits","System"]; HVTab { width:(parent.width-f(12))/4; height:parent.height; text:modelData; selected:window.shortcutTab===index; onClicked:window.changeShortcutTab(index) } }
                                     }
                                     Rectangle { width:parent.width; height:1; color:"#343a3e" }
 
+                                    // IMPORTANT: Preset 1-5 and 6-10 are separate delegates with
+                                    // FIXED indices.  In v08 the index depended on shortcutTab, so
+                                    // changing tabs while a field lost focus could commit P6 into P1.
                                     Column {
-                                        visible:window.shortcutTab===0 || window.shortcutTab===1; width:parent.width; spacing:f(3)
+                                        visible:window.shortcutTab===0; width:parent.width; spacing:f(3)
                                         Repeater {
                                             model:5
                                             delegate:Row {
                                                 width:parent.width; height:f(31); spacing:f(5)
-                                                property int pi:index+(window.shortcutTab===0?0:5)
+                                                property int pi:index
                                                 property var p:backend.presets[pi]
                                                 Text { width:f(22); anchors.verticalCenter:parent.verticalCenter; text:"P"+(parent.pi+1); color:fg; font.pixelSize:f(13) }
-                                                HVField { width:parent.width-f(22+5+73+5+55+5+58+5+26); height:parent.height; bindModel:true; modelText:parent.p?String(parent.p.name):""; onCommit:function(v){backend.setPresetName(parent.pi,v)} }
-                                                HVField { width:f(73); height:parent.height; bindModel:true; modelText:parent.p&&parent.p.set?Number(parent.p.position).toFixed(2):"0.00"; horizontalAlignment:TextInput.AlignHCenter; onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setPresetPosition(parent.pi,n)} }
+                                                HVField { objectName:"presetName"+(parent.pi+1); width:parent.width-f(22+5+73+5+55+5+58+5+26); height:parent.height; bindModel:true; modelText:parent.p?String(parent.p.name):""; onCommit:function(v){backend.setPresetName(parent.pi,v)} }
+                                                HVField { objectName:"presetPosition"+(parent.pi+1); width:f(73); height:parent.height; bindModel:true; modelText:parent.p&&parent.p.set?Number(parent.p.position).toFixed(2):"0.00"; horizontalAlignment:TextInput.AlignHCenter; onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setPresetPosition(parent.pi,n)} }
+                                                HVButton { width:f(55); height:parent.height; text:"Save"; onClicked:backend.savePreset(parent.pi) }
+                                                HVButton { width:f(58); height:parent.height; text:"Recall"; enabled:parent.p?parent.p.set:false; onClicked:backend.recallPreset(parent.pi) }
+                                                HVButton { width:f(26); height:parent.height; text:parent.p&&parent.p.visible?"◉":"○"; onClicked:backend.togglePresetVisible(parent.pi) }
+                                            }
+                                        }
+                                    }
+                                    Column {
+                                        visible:window.shortcutTab===1; width:parent.width; spacing:f(3)
+                                        Repeater {
+                                            model:5
+                                            delegate:Row {
+                                                width:parent.width; height:f(31); spacing:f(5)
+                                                property int pi:index+5
+                                                property var p:backend.presets[pi]
+                                                Text { width:f(22); anchors.verticalCenter:parent.verticalCenter; text:"P"+(parent.pi+1); color:fg; font.pixelSize:f(13) }
+                                                HVField { objectName:"presetName"+(parent.pi+1); width:parent.width-f(22+5+73+5+55+5+58+5+26); height:parent.height; bindModel:true; modelText:parent.p?String(parent.p.name):""; onCommit:function(v){backend.setPresetName(parent.pi,v)} }
+                                                HVField { objectName:"presetPosition"+(parent.pi+1); width:f(73); height:parent.height; bindModel:true; modelText:parent.p&&parent.p.set?Number(parent.p.position).toFixed(2):"0.00"; horizontalAlignment:TextInput.AlignHCenter; onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setPresetPosition(parent.pi,n)} }
                                                 HVButton { width:f(55); height:parent.height; text:"Save"; onClicked:backend.savePreset(parent.pi) }
                                                 HVButton { width:f(58); height:parent.height; text:"Recall"; enabled:parent.p?parent.p.set:false; onClicked:backend.recallPreset(parent.pi) }
                                                 HVButton { width:f(26); height:parent.height; text:parent.p&&parent.p.visible?"◉":"○"; onClicked:backend.togglePresetVisible(parent.pi) }
@@ -305,15 +340,15 @@ ApplicationWindow {
                                             width:parent.width; height:f(28)
                                             property var gp:backend.geometryPoints[index]
                                             Text{width:parent.width*.31;anchors.verticalCenter:parent.verticalCenter;text:parent.gp?parent.gp.name:"";color:fg;font.pixelSize:f(11)}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;modelText:parent.gp?Number(parent.gp.x).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"x",n)}}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;modelText:parent.gp?Number(parent.gp.y).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"y",n)}}
-                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;readOnly:index!==0&&index!==4;modelText:(index===0||index===4)&&parent.gp?Number(parent.gp.z).toFixed(3):"—";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(index===0||index===4){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"z",n)}}}
+                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;modelText:parent.gp?Number(parent.gp.x).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setGeometryPoint(index,"x",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"x",n)}}
+                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;modelText:parent.gp?Number(parent.gp.y).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setGeometryPoint(index,"y",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"y",n)}}
+                                            HVField{width:parent.width*.23;height:parent.height;bindModel:true;readOnly:index!==0&&index!==4;modelText:(index===0||index===4)&&parent.gp?Number(parent.gp.z).toFixed(3):"—";horizontalAlignment:TextInput.AlignHCenter;onTextEdited:{if(index===0||index===4){var n=parseFloat(text);if(!isNaN(n))backend.setGeometryPoint(index,"z",n)}};onCommit:function(v){if(index===0||index===4){var n=parseFloat(v);if(!isNaN(n))backend.setGeometryPoint(index,"z",n)}}}
                                         }
                                     }
                                     Text { text:"Weights & Tension"; color:fg; font.pixelSize:f(12); topPadding:f(4) }
-                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Static Weight:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+86);height:parent.height;bindModel:true;modelText:Number(backend.staticWeightValue).toFixed(2);onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Static",n)}}HVCombo{width:f(86);height:parent.height;model:["kg","lbs"];currentIndex:backend.staticWeightUnit==="lbs"?1:0;onActivated:function(){backend.setWeightUnit("Static",currentText)}} }
-                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Cable Weight:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+86);height:parent.height;bindModel:true;modelText:Number(backend.cableWeightValue).toFixed(2);onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Cable",n)}}HVCombo{width:f(86);height:parent.height;model:["kg/100m","lbs/100m"];currentIndex:backend.cableWeightUnit==="lbs/100m"?1:0;onActivated:function(){backend.setWeightUnit("Cable",currentText)}} }
-                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Cable Tension:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+86);height:parent.height;bindModel:true;modelText:Number(backend.cableTensionValue).toFixed(2);onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Tension",n)}}HVCombo{width:f(86);height:parent.height;model:["kg","lbs"];currentIndex:backend.cableTensionUnit==="lbs"?1:0;onActivated:function(){backend.setWeightUnit("Tension",currentText)}} }
+                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Static Weight:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+86);height:parent.height;bindModel:true;modelText:Number(backend.staticWeightValue).toFixed(2);onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Static",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Static",n)}}HVCombo{width:f(86);height:parent.height;model:["kg","lbs"];currentIndex:backend.staticWeightUnit==="lbs"?1:0;onActivated:function(){backend.setWeightUnit("Static",currentText)}} }
+                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Cable Weight:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+108);height:parent.height;bindModel:true;modelText:Number(backend.cableWeightValue).toFixed(2);onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Cable",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Cable",n)}}HVCombo{width:f(108);height:parent.height;model:["kg/100m","lbs/100m"];currentIndex:backend.cableWeightUnit==="lbs/100m"?1:0;onActivated:function(){backend.setWeightUnit("Cable",currentText)}} }
+                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Cable Tension:";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(105+96);height:parent.height;bindModel:true;modelText:Number(backend.cableTensionValue).toFixed(2);onTextEdited:{var n=parseFloat(text);if(!isNaN(n))backend.setWeightValue("Tension",n)};onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setWeightValue("Tension",n)}}HVCombo{width:f(96);height:parent.height;model:["kg","lbs"];currentIndex:backend.cableTensionUnit==="lbs"?1:0;onActivated:function(){backend.setWeightUnit("Tension",currentText)}} }
                                     Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Highline Mode:";color:fg;font.pixelSize:f(11)}HVCombo{width:parent.width-f(105);height:parent.height;model:["Single Highline","Dual Highline"];currentIndex:backend.highlineMode==="Dual Highline"?1:0;onActivated:function(){backend.setHighlineMode(currentText)}} }
                                 }
                             }
@@ -344,8 +379,8 @@ ApplicationWindow {
                         width:parent.width; height:parent.height*(1-.66)-f(8)
                         Row {
                             anchors.fill:parent; spacing:f(8)
-                            Panel { width:(parent.width-f(8))/2;height:parent.height;FreeDGeometryDiagram{anchors.fill:parent;title:"Top View";subtitle:"X (Tracking) / Z (Offset)";geometryPoints:backend.geometryPoints;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
-                            Panel { width:(parent.width-f(8))/2;height:parent.height;FreeDGeometryDiagram{anchors.fill:parent;title:"Side View";subtitle:"X (Tracking) / Y (Sag)";sideView:true;geometryPoints:backend.geometryPoints;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
+                            Panel { width:(parent.width-f(8))/2;height:parent.height;SpanDiagram{anchors.fill:parent;title:"Top View";subtitle:"X (Tracking) / Z (Offset)";cableProfile:backend.cableProfile;geometryPoints:backend.geometryPoints;showGeometryPoints:true;showPresets:false;showSkate:false;showReference:false;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
+                            Panel { width:(parent.width-f(8))/2;height:parent.height;SpanDiagram{anchors.fill:parent;title:"Side View";subtitle:"X (Tracking) / Y (Sag)";sideView:true;cableProfile:backend.cableProfile;geometryPoints:backend.geometryPoints;showGeometryPoints:true;showPresets:false;showSkate:false;showReference:false;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
                         }
                     }
                 }

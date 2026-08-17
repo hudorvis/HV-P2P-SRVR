@@ -31,7 +31,7 @@ import PySide6.QtQuickControls2  # noqa: F401
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.08"
+APP_VERSION = "26.08.17.09"
 
 
 def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: HVP2PBackend) -> bool:
@@ -99,6 +99,22 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         backend.resetFreeDSettings()
         if backend.freeDOutputIp != "172.20.1.30":
             raise RuntimeError("Free-D Apply/Reset failed")
+
+        # The shared Run/Free-D cable profile must react to tension changes.
+        backend.state.near_limit.position_m = 0.0
+        backend.state.far_limit.position_m = 100.0
+        backend.state.pos_m = 50.0
+        for idx, x in enumerate((0.0, 25.0, 50.0, 75.0, 100.0)):
+            backend.setGeometryPoint(idx, "x", x)
+            backend.setGeometryPoint(idx, "y", 0.0)
+        backend.static_weight_kg = 0.0
+        backend.cable_weight_kg100m = 4.5
+        backend.cable_tension_kg = 50.0
+        low_tension_mid = backend.cableProfile[len(backend.cableProfile)//2]["y"]
+        backend.cable_tension_kg = 200.0
+        high_tension_mid = backend.cableProfile[len(backend.cableProfile)//2]["y"]
+        if not low_tension_mid < high_tension_mid:
+            raise RuntimeError("Cable Tension did not update calculated sag profile")
 
         # The shared status banner must retain the legacy SRVR software E-stop
         # action without affecting other independent safety sources.

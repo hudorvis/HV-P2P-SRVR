@@ -11,6 +11,5 @@
     <file>qml/components/StatusDot.qml</file>
     <file>qml/components/ConnectionCard.qml</file>
     <file>qml/components/SpanDiagram.qml</file>
-    <file>qml/components/FreeDGeometryDiagram.qml</file>
   </qresource>
 </RCC>
