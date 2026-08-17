@@ -223,7 +223,16 @@ ApplicationWindow {
                                         visible:window.shortcutTab===3; width:parent.width; spacing:f(5)
                                         Row { width:parent.width;height:f(32);Text{width:f(150);anchors.verticalCenter:parent.verticalCenter;text:"Acceleration Mode";color:fg;font.pixelSize:f(13)}HVButton{width:f(80);height:parent.height;text:"Power";selected:backend.accelerationMode==="Power";onClicked:backend.setAccelerationMode("Power")}HVButton{width:f(80);height:parent.height;text:"Speed";selected:backend.accelerationMode==="Speed";onClicked:backend.setAccelerationMode("Speed")} }
                                         Row { width:parent.width;height:f(32);Text{width:f(150);anchors.verticalCenter:parent.verticalCenter;text:"Battery Change Mode";color:fg;font.pixelSize:f(13)}HVButton{width:f(80);height:parent.height;text:"Off";selected:!backend.batteryChange;onClicked:backend.setBatteryChange(false)}HVButton{width:f(80);height:parent.height;text:"On";selected:backend.batteryChange;onClicked:backend.setBatteryChange(true)} }
-                                        Row { width:parent.width;height:f(32);spacing:f(4);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Drive Mode";color:fg;font.pixelSize:f(13)}HVButton{width:f(65);height:parent.height;text:"Mode 1";selected:backend.activeDriveMode===0;onClicked:backend.setDriveMode(0)}HVField{width:(parent.width-f(105+65+65+16))/2;height:parent.height;bindModel:true;modelText:backend.driveMode1Name;onCommit:function(v){backend.renameDriveMode(0,v)}}HVButton{width:f(65);height:parent.height;text:"Mode 2";selected:backend.activeDriveMode===1;onClicked:backend.setDriveMode(1)}HVField{width:(parent.width-f(105+65+65+16))/2;height:parent.height;bindModel:true;modelText:backend.driveMode2Name;onCommit:function(v){backend.renameDriveMode(1,v)}} }
+                                        Row {
+                                            width: parent.width
+                                            height: f(32)
+                                            spacing: f(4)
+                                            Text { width:f(150); anchors.verticalCenter:parent.verticalCenter; text:"Drive Mode"; color:fg; font.pixelSize:f(13) }
+                                            HVButton { width:f(60); height:parent.height; text:"Mode 1"; selected:backend.activeDriveMode===0; onClicked:backend.setDriveMode(0) }
+                                            HVField { width:(parent.width-f(150+60+60+12))/2; height:parent.height; bindModel:true; modelText:backend.driveMode1Name; onCommit:function(v){backend.renameDriveMode(0,v)} }
+                                            HVButton { width:f(60); height:parent.height; text:"Mode 2"; selected:backend.activeDriveMode===1; onClicked:backend.setDriveMode(1) }
+                                            HVField { width:(parent.width-f(150+60+60+12))/2; height:parent.height; bindModel:true; modelText:backend.driveMode2Name; onCommit:function(v){backend.renameDriveMode(1,v)} }
+                                        }
                                         Row { width:parent.width;height:f(32);spacing:f(7);Text{width:f(150);anchors.verticalCenter:parent.verticalCenter;text:"Calibration Mode";color:fg;font.pixelSize:f(13)}HVButton{width:(parent.width-f(157))/2;height:parent.height;text:"Limit Calibration";onClicked:backend.openLimitCalibration()}HVButton{width:(parent.width-f(157))/2;height:parent.height;text:"Winch Calibration";onClicked:backend.openWinchCalibration()} }
                                     }
                                 }
@@ -402,29 +411,29 @@ ApplicationWindow {
                                     Row {
                                         width: parent.width
                                         height: f(31)
-                                        Text { width: f(105); anchors.verticalCenter: parent.verticalCenter; text: "Static Weight:"; color: fg; font.pixelSize: f(11) }
+                                        Text { width: f(105); anchors.verticalCenter: parent.verticalCenter; text: "Skate Weight:"; color: fg; font.pixelSize: f(11) }
                                         HVField {
                                             width: parent.width - f(105 + 86)
                                             height: parent.height
                                             bindModel: true
-                                            modelText: Number(backend.staticWeightValue).toFixed(2)
+                                            modelText: Number(backend.skateWeightValue).toFixed(2)
                                             onTextEdited: {
                                                 var n = parseFloat(text)
                                                 if (!isNaN(n))
-                                                    backend.setWeightValue("Static", n)
+                                                    backend.setWeightValue("Skate", n)
                                             }
                                             onCommit: function(v) {
                                                 var n = parseFloat(v)
                                                 if (!isNaN(n))
-                                                    backend.setWeightValue("Static", n)
+                                                    backend.setWeightValue("Skate", n)
                                             }
                                         }
                                         HVCombo {
                                             width: f(86)
                                             height: parent.height
                                             model: ["kg", "lbs"]
-                                            currentIndex: backend.staticWeightUnit === "lbs" ? 1 : 0
-                                            onActivated: function() { backend.setWeightUnit("Static", currentText) }
+                                            currentIndex: backend.skateWeightUnit === "lbs" ? 1 : 0
+                                            onActivated: function() { backend.setWeightUnit("Skate", currentText) }
                                         }
                                     }
                                     Row {

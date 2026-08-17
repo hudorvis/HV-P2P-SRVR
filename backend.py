@@ -133,7 +133,7 @@ class HVP2PBackend(QObject):
     logChanged = Signal()
     calibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.10", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.11", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
@@ -219,10 +219,10 @@ class HVP2PBackend(QObject):
             {"name":"P4","x":75.0,"y":5.0,"z":None},
             {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
         ]
-        self.static_weight_kg = 25.0
+        self.skate_weight_kg = 25.0
         self.cable_weight_kg100m = 4.5
         self.cable_tension_kg = 100.0
-        self.static_weight_unit = "kg"
+        self.skate_weight_unit = "kg"
         self.cable_weight_unit = "kg/100m"
         self.cable_tension_unit = "kg"
         self.highline_mode = "Single Highline"
@@ -760,13 +760,24 @@ class HVP2PBackend(QObject):
         t = max(0.0, min(1.0, (float(x) - p0["x"]) / span))
         return z0 + (z1-z0)*t
 
-    def _cable_y_at(self, x, geometry, cable_weight, tension, static_weight, highline, skate_x):
+    def _cable_y_at(self, x, geometry, cable_weight, tension, skate_weight, highline, skate_x):
         """Physical side-view cable height at X.
 
-        The curve is the smooth operator-entered reference geometry minus:
-        1) whole-span uniform cable self-weight sag, and
-        2) the live skate/package point-load deflection.
-        This is the same model used by the Free-D output and both UI diagrams.
+        The single canonical sag model deliberately uses *all four* operator
+        inputs from the Free-D Geometry card:
+          - Skate Weight: suspended camera/skate package mass.
+          - Cable Weight: kg per 100 m, per individual highline cable.
+          - Cable Tension: kgf, per individual highline cable (legacy SRVR rule).
+          - Highline Mode: Single carries all Skate Weight; Dual shares it 50/50.
+
+        Cable self-weight is represented by the standard small-sag parabolic
+        horizontal-tension approximation.  The skate is a moving point load.
+        With kg mass values and kgf tension, gravitational acceleration cancels
+        in the load/tension ratio.  The result is subtracted from the smooth
+        operator-entered P1..P5 reference-height profile.
+
+        This exact function is used by both Run/Free-D Side View and by Free-D Y,
+        so the visual arc and transmitted sag value cannot use different models.
         """
         pts = self._normalised_geometry(geometry)
         if len(pts) < 2:
@@ -779,9 +790,12 @@ class HVP2PBackend(QObject):
         right = span-rel_x
 
         rope_kg_m = max(0.0, float(cable_weight))/100.0
+        # Cable weight and cable tension are entered per individual highline.
+        # Dual Highline therefore does not halve the self-weight/tension ratio of
+        # either cable; it only shares the suspended skate package between them.
         tension_per_line = max(0.01, float(tension))
         line_count = 2.0 if str(highline).strip().lower().startswith("dual") else 1.0
-        skate_per_line = max(0.0, float(static_weight))/line_count
+        skate_per_line = max(0.0, float(skate_weight)) / line_count
 
         # Uniform cable load: continuous parabola with zero drop at both ends.
         cable_drop = (rope_kg_m * left * right) / (2.0 * tension_per_line)
@@ -802,7 +816,7 @@ class HVP2PBackend(QObject):
         geometry = [dict(p) for p in (cfg.get("geometry", self.geometry) if cfg else self.geometry)]
         cable_weight = float(cfg.get("cable_weight_kg100m", self.cable_weight_kg100m) if cfg else self.cable_weight_kg100m)
         tension = float(cfg.get("cable_tension_kg", self.cable_tension_kg) if cfg else self.cable_tension_kg)
-        static_weight = float(cfg.get("static_weight_kg", self.static_weight_kg) if cfg else self.static_weight_kg)
+        skate_weight = float(cfg.get("skate_weight_kg", cfg.get("static_weight_kg", self.skate_weight_kg)) if cfg else self.skate_weight_kg)
         highline = str(cfg.get("highline_mode", self.highline_mode) if cfg else self.highline_mode)
         pts = self._normalised_geometry(geometry)
         if len(pts) < 2:
@@ -816,7 +830,7 @@ class HVP2PBackend(QObject):
             x = x0 + span * i / max(1, count-1)
             result.append({
                 "x": float(x),
-                "y": float(self._cable_y_at(x, pts, cable_weight, tension, static_weight, highline, skate_x)),
+                "y": float(self._cable_y_at(x, pts, cable_weight, tension, skate_weight, highline, skate_x)),
                 "z": float(self._geometry_z(x, pts)),
             })
         return result
@@ -828,14 +842,14 @@ class HVP2PBackend(QObject):
         output_offsets = dict(cfg.get("output_offsets", self.freed_output_offsets) if cfg else self.freed_output_offsets)
         cable_weight = float(cfg.get("cable_weight_kg100m", self.cable_weight_kg100m) if cfg else self.cable_weight_kg100m)
         tension = float(cfg.get("cable_tension_kg", self.cable_tension_kg) if cfg else self.cable_tension_kg)
-        static_weight = float(cfg.get("static_weight_kg", self.static_weight_kg) if cfg else self.static_weight_kg)
+        skate_weight = float(cfg.get("skate_weight_kg", cfg.get("static_weight_kg", self.skate_weight_kg)) if cfg else self.skate_weight_kg)
         highline = str(cfg.get("highline_mode", self.highline_mode) if cfg else self.highline_mode)
 
         x = float(self.state.pos_m or 0.0) - float(self.state.near_limit.position_m or 0.0)
         pts = self._normalised_geometry(geometry)
         if len(pts) >= 2:
             x = max(pts[0]["x"], min(pts[-1]["x"], x))
-        y = self._cable_y_at(x, pts, cable_weight, tension, static_weight, highline, x)
+        y = self._cable_y_at(x, pts, cable_weight, tension, skate_weight, highline, x)
         z = self._geometry_z(x, pts)
         return (
             x + float(output_offsets.get("X",0.0)),
@@ -963,10 +977,12 @@ class HVP2PBackend(QObject):
             "lens_cal": dict(self.freed_lens_cal),
             "lens_auto_seen": dict(self._freed_lens_auto_seen),
             "geometry": [dict(p) for p in self.geometry],
-            "static_weight_kg": float(self.static_weight_kg),
+            "skate_weight_kg": float(self.skate_weight_kg),
+            "static_weight_kg": float(self.skate_weight_kg),  # legacy config compatibility
             "cable_weight_kg100m": float(self.cable_weight_kg100m),
             "cable_tension_kg": float(self.cable_tension_kg),
-            "static_weight_unit": str(self.static_weight_unit),
+            "skate_weight_unit": str(self.skate_weight_unit),
+            "static_weight_unit": str(self.skate_weight_unit),  # legacy config compatibility
             "cable_weight_unit": str(self.cable_weight_unit),
             "cable_tension_unit": str(self.cable_tension_unit),
             "highline_mode": str(self.highline_mode),
@@ -1011,10 +1027,10 @@ class HVP2PBackend(QObject):
                 g["x"] = float(g.get("x", i*25.0))
                 g["y"] = float(g.get("y", 0.0))
                 g["z"] = float(g.get("z", 0.0) or 0.0) if i in (0,4) else None
-        self.static_weight_kg = max(0.0, float(snap.get("static_weight_kg", self.static_weight_kg)))
+        self.skate_weight_kg = max(0.0, float(snap.get("skate_weight_kg", snap.get("static_weight_kg", self.skate_weight_kg))))
         self.cable_weight_kg100m = max(0.0, float(snap.get("cable_weight_kg100m", self.cable_weight_kg100m)))
         self.cable_tension_kg = max(0.01, float(snap.get("cable_tension_kg", self.cable_tension_kg)))
-        self.static_weight_unit = "lbs" if str(snap.get("static_weight_unit", self.static_weight_unit)).lower().startswith("lb") else "kg"
+        self.skate_weight_unit = "lbs" if str(snap.get("skate_weight_unit", snap.get("static_weight_unit", self.skate_weight_unit))).lower().startswith("lb") else "kg"
         self.cable_weight_unit = "lbs/100m" if str(snap.get("cable_weight_unit", self.cable_weight_unit)).lower().startswith("lb") else "kg/100m"
         self.cable_tension_unit = "lbs" if str(snap.get("cable_tension_unit", self.cable_tension_unit)).lower().startswith("lb") else "kg"
         self.highline_mode = "Dual Highline" if str(snap.get("highline_mode", self.highline_mode)).lower().startswith("dual") else "Single Highline"
@@ -1146,10 +1162,10 @@ class HVP2PBackend(QObject):
                 except Exception: pass
             seen = dict(fd.get("lens_auto_seen", self._freed_lens_auto_seen))
             self._freed_lens_auto_seen = {k: seen.get(k) for k in ("zoom_min","zoom_max","focus_min","focus_max")}
-            self.static_weight_kg = max(0.0, float(fd.get("static_weight_kg", self.static_weight_kg)))
+            self.skate_weight_kg = max(0.0, float(fd.get("skate_weight_kg", fd.get("static_weight_kg", self.skate_weight_kg))))
             self.cable_weight_kg100m = max(0.0, float(fd.get("cable_weight_kg100m", self.cable_weight_kg100m)))
             self.cable_tension_kg = max(0.01, float(fd.get("cable_tension_kg", self.cable_tension_kg)))
-            self.static_weight_unit = "lbs" if str(fd.get("static_weight_unit", self.static_weight_unit)).lower().startswith("lb") else "kg"
+            self.skate_weight_unit = "lbs" if str(fd.get("skate_weight_unit", fd.get("static_weight_unit", self.skate_weight_unit))).lower().startswith("lb") else "kg"
             self.cable_weight_unit = "lbs/100m" if str(fd.get("cable_weight_unit", self.cable_weight_unit)).lower().startswith("lb") else "kg/100m"
             self.cable_tension_unit = "lbs" if str(fd.get("cable_tension_unit", self.cable_tension_unit)).lower().startswith("lb") else "kg"
             self.highline_mode = "Dual Highline" if str(fd.get("highline_mode", self.highline_mode)).lower().startswith("dual") else "Single Highline"
@@ -1204,10 +1220,12 @@ class HVP2PBackend(QObject):
                     "lens_scale_mode": str(freed_snap.get("lens_scale_mode", self.freed_lens_scale_mode)),
                     "lens_cal": dict(freed_snap.get("lens_cal", self.freed_lens_cal)),
                     "lens_auto_seen": dict(freed_snap.get("lens_auto_seen", self._freed_lens_auto_seen)),
-                    "static_weight_kg": float(freed_snap.get("static_weight_kg", self.static_weight_kg)),
+                    "skate_weight_kg": float(freed_snap.get("skate_weight_kg", freed_snap.get("static_weight_kg", self.skate_weight_kg))),
+                    "static_weight_kg": float(freed_snap.get("skate_weight_kg", freed_snap.get("static_weight_kg", self.skate_weight_kg))),  # legacy
                     "cable_weight_kg100m": float(freed_snap.get("cable_weight_kg100m", self.cable_weight_kg100m)),
                     "cable_tension_kg": float(freed_snap.get("cable_tension_kg", self.cable_tension_kg)),
-                    "static_weight_unit": str(freed_snap.get("static_weight_unit", self.static_weight_unit)),
+                    "skate_weight_unit": str(freed_snap.get("skate_weight_unit", freed_snap.get("static_weight_unit", self.skate_weight_unit))),
+                    "static_weight_unit": str(freed_snap.get("skate_weight_unit", freed_snap.get("static_weight_unit", self.skate_weight_unit))),  # legacy
                     "cable_weight_unit": str(freed_snap.get("cable_weight_unit", self.cable_weight_unit)),
                     "cable_tension_unit": str(freed_snap.get("cable_tension_unit", self.cable_tension_unit)),
                     "highline_mode": str(freed_snap.get("highline_mode", self.highline_mode)),
@@ -1380,9 +1398,14 @@ class HVP2PBackend(QObject):
     @Property('QVariantMap', notify=configChanged)
     def lensCalibration(self): return dict(self.freed_lens_cal)
     @Property(float, notify=configChanged)
-    def staticWeightValue(self): return self._kg_to_lb(self.static_weight_kg) if self.static_weight_unit == "lbs" else float(self.static_weight_kg)
+    def skateWeightValue(self): return self._kg_to_lb(self.skate_weight_kg) if self.skate_weight_unit == "lbs" else float(self.skate_weight_kg)
     @Property(str, notify=configChanged)
-    def staticWeightUnit(self): return str(self.static_weight_unit)
+    def skateWeightUnit(self): return str(self.skate_weight_unit)
+    # Legacy aliases retained so an older QML/config package can still bind safely.
+    @Property(float, notify=configChanged)
+    def staticWeightValue(self): return self.skateWeightValue
+    @Property(str, notify=configChanged)
+    def staticWeightUnit(self): return self.skateWeightUnit
     @Property(float, notify=configChanged)
     def cableWeightValue(self): return self._kg_to_lb(self.cable_weight_kg100m) if self.cable_weight_unit == "lbs/100m" else float(self.cable_weight_kg100m)
     @Property(str, notify=configChanged)
@@ -1756,8 +1779,8 @@ class HVP2PBackend(QObject):
     @Slot(str,float)
     def setWeightValue(self, which, value):
         which = str(which).lower(); v = max(0.0, float(value))
-        if which.startswith("static"):
-            self.static_weight_kg = self._lb_to_kg(v) if self.static_weight_unit == "lbs" else v
+        if which.startswith("skate") or which.startswith("static"):
+            self.skate_weight_kg = self._lb_to_kg(v) if self.skate_weight_unit == "lbs" else v
         elif which.startswith("cable"):
             self.cable_weight_kg100m = self._lb_to_kg(v) if self.cable_weight_unit == "lbs/100m" else v
         elif which.startswith("tension"):
@@ -1768,8 +1791,8 @@ class HVP2PBackend(QObject):
     @Slot(str,str)
     def setWeightUnit(self, which, unit):
         which = str(which).lower(); unit = str(unit)
-        if which.startswith("static"):
-            self.static_weight_unit = "lbs" if unit.lower().startswith("lb") else "kg"
+        if which.startswith("skate") or which.startswith("static"):
+            self.skate_weight_unit = "lbs" if unit.lower().startswith("lb") else "kg"
         elif which.startswith("cable"):
             self.cable_weight_unit = "lbs/100m" if unit.lower().startswith("lb") else "kg/100m"
         elif which.startswith("tension"):

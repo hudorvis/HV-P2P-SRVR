@@ -256,16 +256,10 @@ Item {
 
             if(root.showSkate) {
                 var sx=xFor(root.currentPosition,left,right), sy=yy(root.currentPosition)
-                var endpointThreshold=Math.max(1.0,span*0.035)
-                var atNear=Math.abs(Number(root.currentPosition)-lo)<=endpointThreshold
-                var atFar=Math.abs(Number(root.currentPosition)-hi)<=endpointThreshold
-                var skateLabelX=sx
-                var skateLabelY=sy-35
-                if(atNear) { skateLabelX=Math.min(right-55,sx+58); skateLabelY=sy+46 }
-                else if(atFar) { skateLabelX=Math.max(left+55,sx-58); skateLabelY=sy+46 }
-
-                c.fillStyle=root.accent; c.strokeStyle=root.accent; c.font="13px Helvetica Neue"; c.textAlign="center"
-                c.fillText("SKATE",skateLabelX,skateLabelY)
+                // The moving green arrow and camera/skate icon are deliberately
+                // self-explanatory; no SKATE text is drawn, avoiding collisions
+                // with the Near/Far Limit labels at either endpoint.
+                c.fillStyle=root.accent; c.strokeStyle=root.accent
                 c.beginPath(); c.moveTo(sx-9,sy-28);c.lineTo(sx+9,sy-28);c.lineTo(sx,sy-10);c.closePath();c.fill()
                 c.strokeStyle="#e4e7e5"; c.strokeRect(sx-8,sy+7,16,13); c.strokeRect(sx-11,sy+10,3,7); c.strokeRect(sx+8,sy+10,3,7)
             }

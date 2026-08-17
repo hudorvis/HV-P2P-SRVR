@@ -28,7 +28,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.10", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.11", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -141,13 +141,13 @@ try:
 
     # Free-D staged page editing: unit changes convert display only, editable
     # values are interpreted in the selected unit, and Reset restores Apply.
-    b.static_weight_kg = 25.0
-    b.setWeightUnit("Static", "lbs")
-    assert abs(b.staticWeightValue - 55.1155655) < 1e-4
-    b.setWeightValue("Static", 44.0924524)
-    assert abs(b.static_weight_kg - 20.0) < 1e-4
-    b.setWeightUnit("Static", "kg")
-    assert abs(b.staticWeightValue - 20.0) < 1e-4
+    b.skate_weight_kg = 25.0
+    b.setWeightUnit("Skate", "lbs")
+    assert abs(b.skateWeightValue - 55.1155655) < 1e-4
+    b.setWeightValue("Skate", 44.0924524)
+    assert abs(b.skate_weight_kg - 20.0) < 1e-4
+    b.setWeightUnit("Skate", "kg")
+    assert abs(b.skateWeightValue - 20.0) < 1e-4
 
     b.setFreeDEnabled("Input", True)
     b.setFreeDEnabled("Output", True)
@@ -188,7 +188,7 @@ try:
     b.w1p.last_seen = now
     b.winch_rs_status = "Connected"
 
-    # Static camera-package weight and Single/Dual Highline must materially
+    # Skate/camera-package weight and Single/Dual Highline must materially
     # affect the Free-D sag calculation; these fields must not be decorative.
     b.state.near_limit.position_m = 0.0
     b.state.far_limit.position_m = 100.0
@@ -198,7 +198,7 @@ try:
         b.setGeometryPoint(idx, "y", 0.0)
     b.cable_weight_kg100m = 0.0
     b.cable_tension_kg = 100.0
-    b.static_weight_kg = 20.0
+    b.skate_weight_kg = 20.0
     b.highline_mode = "Single Highline"
     single_y = b._xyz()[1]
     b.highline_mode = "Dual Highline"
@@ -208,7 +208,7 @@ try:
 
     # The exact SAME canonical cable profile drives Run and Free-D. Changing
     # cable tension must immediately change the calculated side-view sag.
-    b.static_weight_kg = 0.0
+    b.skate_weight_kg = 0.0
     b.cable_weight_kg100m = 4.5
     b.highline_mode = "Single Highline"
     b.cable_tension_kg = 50.0
@@ -218,6 +218,49 @@ try:
     high_tension_profile = b._cable_profile(samples=101)
     high_mid = high_tension_profile[len(high_tension_profile)//2]["y"]
     assert low_mid < high_mid <= 0.0, (low_mid, high_mid)
+
+    # Every Free-D sag input must materially participate in the same canonical
+    # model used by the UI and Free-D Y output.
+    b.geometry = [
+        {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
+        {"name":"P2","x":25.0,"y":0.0,"z":None},
+        {"name":"P3","x":50.0,"y":0.0,"z":None},
+        {"name":"P4","x":75.0,"y":0.0,"z":None},
+        {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
+    ]
+    b.state.pos_m = 50.0
+    b.skate_weight_kg = 20.0
+    b.cable_weight_kg100m = 4.5
+    b.cable_tension_kg = 100.0
+    b.highline_mode = "Single Highline"
+    base_y = b._xyz()[1]
+
+    b.skate_weight_kg = 40.0
+    heavier_skate_y = b._xyz()[1]
+    assert heavier_skate_y < base_y, (heavier_skate_y, base_y)
+
+    b.skate_weight_kg = 20.0
+    b.cable_weight_kg100m = 9.0
+    heavier_cable_y = b._xyz()[1]
+    assert heavier_cable_y < base_y, (heavier_cable_y, base_y)
+
+    b.cable_weight_kg100m = 4.5
+    b.cable_tension_kg = 200.0
+    higher_tension_y = b._xyz()[1]
+    assert higher_tension_y > base_y, (higher_tension_y, base_y)
+
+    b.cable_tension_kg = 100.0
+    b.highline_mode = "Dual Highline"
+    dual_loaded_y = b._xyz()[1]
+    assert dual_loaded_y > base_y, (dual_loaded_y, base_y)
+
+    # Free-D Y at the live skate must be exactly the canonical sag curve value
+    # (before output offset/inversion), not a second independent calculation.
+    b.highline_mode = "Single Highline"
+    direct_y = b._cable_y_at(50.0, b.geometry, b.cable_weight_kg100m,
+                             b.cable_tension_kg, b.skate_weight_kg,
+                             b.highline_mode, 50.0)
+    assert abs(b._xyz()[1] - direct_y) < 1e-9
 
     # Top-view Z is a complete cable line: P2/P3/P4 lie on the P1-P5
     # interpolation even though those intermediate Z fields are intentionally disabled.
@@ -233,7 +276,7 @@ try:
     # Restore the requested nominal values for the staged Apply test.
     b.cable_weight_kg100m = 4.5
     b.cable_tension_kg = 100.0
-    b.static_weight_kg = 20.0
+    b.skate_weight_kg = 20.0
     b.highline_mode = "Dual Highline"
 
     b.setFreeDNetwork("Output", "IP", "172.20.1.30")
@@ -262,16 +305,16 @@ try:
     assert b.lensType == "i24" and b.lensScale == "Manual"
 
     b.setFreeDNetwork("Output", "IP", "10.0.0.99")
-    b.setWeightValue("Static", 99.0)
+    b.setWeightValue("Skate", 99.0)
     # An unrelated config save must not accidentally commit staged Free-D edits.
     b.setPresetName(1, "Unrelated Save")
     import json
     saved = json.loads(b._config_path.read_text())
     assert saved["free_d"]["target_ip"] == "172.20.1.30"
-    assert abs(float(saved["free_d"]["static_weight_kg"]) - 20.0) < 1e-4
+    assert abs(float(saved["free_d"]["skate_weight_kg"]) - 20.0) < 1e-4
     b.resetFreeDSettings()
     assert b.freeDOutputIp == "172.20.1.30", "Free-D Reset did not restore last Apply"
-    assert abs(b.staticWeightValue - 20.0) < 1e-4
+    assert abs(b.skateWeightValue - 20.0) < 1e-4
 
     # SRVR status banner E-stop toggles only the software latch and leaves
     # other safety sources to the normal safety aggregation.

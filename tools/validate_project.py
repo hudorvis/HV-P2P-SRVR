@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.10"
+VERSION = "26.08.17.11"
 ERRORS: list[str] = []
 
 
@@ -182,7 +182,7 @@ require("self._saved_freed_snapshot" in backend and "resetFreeDSettings" in back
 require("_kg_to_lb" in backend and "_lb_to_kg" in backend,
         "kg/lbs automatic conversion support missing")
 require("skate_per_line" in backend and "point_drop" in backend and "highline_mode" in backend,
-        "Static Weight / Dual Highline sag model is not active in Free-D calculation")
+        "Skate Weight / Dual Highline sag model is not active in Free-D calculation")
 require('getattr(self, "_saved_freed_snapshot"' in backend and 'def _send_freed' in backend,
         "live Free-D output is not using the last-applied settings snapshot")
 
@@ -273,6 +273,14 @@ require('xattr -cr "$APP_PATH" || true' in workflow,
         "extended-attribute cleanup before final app signature is missing")
 require('QT_QPA_PLATFORM=cocoa "$ROUNDTRIP_EXE" --smoke-test' in workflow,
         "round-trip extracted app smoke test missing")
+
+require('text: "Skate Weight:"' in qml_main, "Free-D must label the suspended package as Skate Weight")
+require('text: "Static Weight:"' not in qml_main, "obsolete Static Weight label remains in Free-D")
+require('backend.skateWeightValue' in qml_main and 'setWeightValue("Skate", n)' in qml_main,
+        "Skate Weight editor is not wired to the backend")
+require('Text { width:f(150); anchors.verticalCenter:parent.verticalCenter; text:"Drive Mode"' in qml_main,
+        "System Drive Mode row is not aligned to the common 150px control column")
+require('fillText("SKATE"' not in span_qml, "Top/Side span diagrams still draw the SKATE text label")
 
 if ERRORS:
     print("HV P2P SRVR preflight FAILED:", file=sys.stderr)

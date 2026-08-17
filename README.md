@@ -1,16 +1,20 @@
-# HV P2P SRVR v26.08.17.10 — Qt Quick macOS Intel test build
+# HV P2P SRVR v26.08.17.11 — Qt Quick macOS Intel test build
 
-This revision carries forward all v26.08.17.09 Run/Free-D/backend fixes and corrects the QML syntax/lint failure that stopped v09 before deployment. The visible application remains PySide6 + Qt Quick/QML only; Tkinter/ttk is not used.
+This revision carries forward the working Qt Quick build/deployment path and applies the requested Run/Free-D refinements without changing the locked overall visual language.
 
-## v26.08.17.10 changes
+## v26.08.17.11 changes
 
-- Fixes the six `Unexpected token ';'` qmllint errors in `qml/Main.qml`. These came from JavaScript-style semicolons placed between adjacent QML signal-handler attributes (`onTextEdited` and `onCommit`). The affected geometry and Static/Cable/Tension editors have been rewritten as explicit multi-line QML objects using normal QML handler syntax.
-- Removes the qmllint warnings reported by the custom combo-box delegate by using `pragma ComponentBehavior: Bound`, explicitly declared delegate roles, and qualified delegate-property access.
-- Removes the reusable `SpanDiagram.qml` component's direct reference to the global `backend` context property. The diagram now repaints from changes to its own bound properties, which is cleaner, reusable and lint-safe.
-- Adds a pre-dependency static guard that rejects the exact illegal `}; on...:` handler pattern that broke v09 before GitHub even installs Qt.
-- Expands local QML structural checks to balance `{}`, `()` and `[]`, rather than braces only.
-- Preserves all v09 requested behaviour: fixed Preset 1–5 / 6–10 edit isolation, shared Run/Free-D cable profile, smooth calculated Side View sag, no Run camera/FOV guide line, endpoint-safe SKATE label, simplified CTRL/W1P E-Stop banner naming, live cable-tension sag preview, full `kg/100m` selector, and complete Free-D Top View cable/geometry display.
-- No intentional visual redesign has been made relative to v09.
+- Renames the Free-D **Static Weight** control to **Skate Weight** throughout the visible Qt Quick interface.
+- Makes **Skate Weight / Cable Weight / Cable Tension / Highline Mode** explicit inputs to the single canonical cable-sag model used by:
+  - Run Side View,
+  - Free-D Side View,
+  - the live Free-D Y value, and
+  - transmitted Free-D Y after Apply.
+- Preserves the legacy engineering rule from the previous SRVR backend: Cable Weight and Cable Tension are entered **per individual highline cable**. Dual Highline shares the suspended Skate Weight between the two cables; each cable still carries its own self-weight at its entered tension.
+- Keeps backward configuration compatibility with older `static_weight_kg` / `static_weight_unit` keys while saving the new `skate_weight_kg` / `skate_weight_unit` names.
+- Aligns the **Drive Mode** controls in Shortcuts > System to the same 150 px control start used by Acceleration Mode, Battery Change Mode and Calibration Mode. The Mode 1 button therefore starts directly under the Battery Change `Off` button column.
+- Removes the `SKATE` text label from both shared Top View / Side View diagrams. The green downward arrow and moving skate/camera icon remain.
+- Expands regression/smoke tests so Skate Weight, Cable Weight, Cable Tension and Single/Dual Highline are each proven to change the calculated sag as expected, and verifies Free-D Y uses the exact same sag function as the displayed cable profile.
 
 ## Build output
 
@@ -18,11 +22,11 @@ The workflow builds macOS Intel (`x86_64`) only. It does not perform Apple Devel
 
 After a successful GitHub Actions run, download the artifact:
 
-`HV-P2P-SRVR-v26.08.17.10-macOS-Intel`
+`HV-P2P-SRVR-v26.08.17.11-macOS-Intel`
 
 The GitHub artifact contains one transport ZIP:
 
-`HV P2P SRVR v26.08.17.10 macOS Intel.zip`
+`HV P2P SRVR v26.08.17.11 macOS Intel.zip`
 
 That inner ZIP contains the single `HV P2P SRVR.app` bundle and preserves the macOS executable permissions/bundle structure.
 

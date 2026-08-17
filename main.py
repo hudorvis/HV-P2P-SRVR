@@ -31,7 +31,7 @@ import PySide6.QtQuickControls2  # noqa: F401
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.10"
+APP_VERSION = "26.08.17.11"
 
 
 def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: HVP2PBackend) -> bool:
@@ -91,7 +91,7 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         backend.setFreeDInvert("Output", "Y", True)
         backend.setGeometryPoint(1, "x", 25.0)
         backend.setGeometryPoint(1, "y", 5.0)
-        backend.setWeightUnit("Static", "lbs")
+        backend.setWeightUnit("Skate", "lbs")
         backend.setLensType("u16")
         backend.setLensScale("Auto")
         backend.applyFreeDSettings()
@@ -107,7 +107,7 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         for idx, x in enumerate((0.0, 25.0, 50.0, 75.0, 100.0)):
             backend.setGeometryPoint(idx, "x", x)
             backend.setGeometryPoint(idx, "y", 0.0)
-        backend.static_weight_kg = 0.0
+        backend.skate_weight_kg = 0.0
         backend.cable_weight_kg100m = 4.5
         backend.cable_tension_kg = 50.0
         low_tension_mid = backend.cableProfile[len(backend.cableProfile)//2]["y"]
@@ -115,6 +115,24 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         high_tension_mid = backend.cableProfile[len(backend.cableProfile)//2]["y"]
         if not low_tension_mid < high_tension_mid:
             raise RuntimeError("Cable Tension did not update calculated sag profile")
+
+        # Exercise every operator sag input on the real Qt/macOS smoke path.
+        backend.cable_tension_kg = 100.0
+        backend.cable_weight_kg100m = 4.5
+        backend.skate_weight_kg = 20.0
+        backend.highline_mode = "Single Highline"
+        base_mid = backend.cableProfile[len(backend.cableProfile)//2]["y"]
+        backend.skate_weight_kg = 40.0
+        if not backend.cableProfile[len(backend.cableProfile)//2]["y"] < base_mid:
+            raise RuntimeError("Skate Weight did not affect calculated sag profile")
+        backend.skate_weight_kg = 20.0
+        backend.cable_weight_kg100m = 9.0
+        if not backend.cableProfile[len(backend.cableProfile)//2]["y"] < base_mid:
+            raise RuntimeError("Cable Weight did not affect calculated sag profile")
+        backend.cable_weight_kg100m = 4.5
+        backend.highline_mode = "Dual Highline"
+        if not backend.cableProfile[len(backend.cableProfile)//2]["y"] > base_mid:
+            raise RuntimeError("Highline Mode did not affect calculated skate-load sag")
 
         # The shared status banner must retain the legacy SRVR software E-stop
         # action without affecting other independent safety sources.
