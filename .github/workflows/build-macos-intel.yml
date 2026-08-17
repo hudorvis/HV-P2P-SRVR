@@ -11,6 +11,7 @@ on:
       - 'resources.qrc'
       - 'HV_P2P_SRVR.pyproject'
       - 'requirements.txt'
+      - 'tools/**'
       - '.github/workflows/build-macos-intel.yml'
 
 permissions:
@@ -19,10 +20,11 @@ permissions:
 jobs:
   build-macos-intel:
     runs-on: macos-15-intel
-    timeout-minutes: 45
+    timeout-minutes: 50
     env:
-      APP_VERSION: '26.08.17.04'
+      APP_VERSION: '26.08.17.05'
       QT_QUICK_CONTROLS_STYLE: Basic
+      PYTHONUNBUFFERED: '1'
 
     steps:
       - name: Checkout
@@ -41,6 +43,13 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - name: Static project preflight
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python tools/validate_project.py
+          python -m py_compile main.py backend.py tools/validate_project.py
+
       - name: Install Qt for Python
         shell: bash
         run: |
@@ -48,62 +57,130 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python - <<'PY'
+          import platform
           import PySide6
+          print('Python:', platform.python_version())
           print('PySide6:', PySide6.__version__)
+          print('Machine:', platform.machine())
+          assert platform.machine() == 'x86_64'
           PY
 
-      - name: Validate project manifest
+      - name: Backend safety and calibration regression tests
         shell: bash
         run: |
           set -euxo pipefail
-          test -f HV_P2P_SRVR.pyproject
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          p=Path('HV_P2P_SRVR.pyproject')
-          cfg=json.loads(p.read_text())
-          files=cfg['files']
-          assert files, 'project manifest is empty'
-          for f in files:
-              assert Path(f).exists(), f'missing project file: {f}'
-              assert not f.startswith('.github/'), 'workflow must never be an app source'
-          print('Project manifest OK:', len(files), 'source/resource files')
-          PY
+          python tools/test_backend_logic.py
 
-      - name: Generate embedded Qt resources
+      - name: Create isolated deployment source tree
         shell: bash
         run: |
           set -euxo pipefail
-          pyside6-rcc resources.qrc -o resources_rc.py
-          python -m py_compile main.py backend.py resources_rc.py
+          STAGE="$RUNNER_TEMP/hvp2p-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
 
-      - name: QML lint
+          # Explicit allow-list only.  The v26.08.17.03/.04 failures happened
+          # because pyside6-deploy/Nuitka could see the repository .github
+          # directory.  Deployment now runs outside GITHUB_WORKSPACE, so that
+          # directory physically cannot be bundled.
+          cp main.py backend.py resources.qrc HV_P2P_SRVR.pyproject "$STAGE/"
+          cp -R qml "$STAGE/"
+
+          echo 'Staged files:'
+          find "$STAGE" -maxdepth 4 -print | sort
+
+          # Hard guarantee: source-control/build metadata does not exist in the
+          # deployment tree before Qt/Nuitka starts.
+          test ! -e "$STAGE/.github"
+          test ! -e "$STAGE/.git"
+          test ! -e "$STAGE/assets"
+          test ! -e "$STAGE/release"
+          test ! -e "$STAGE/tools"
+
+      - name: Generate resources and validate QML in isolated tree
         shell: bash
         run: |
           set -euxo pipefail
-          pyside6-qmllint qml/Main.qml qml/components/*.qml
+          STAGE="$RUNNER_TEMP/hvp2p-stage"
+          cd "$STAGE"
+
+          # resources.qrc convention is rc_<qrc basename>.py.  This exact name
+          # also satisfies pyside6-deploy's dependency scanner.
+          pyside6-rcc resources.qrc -o rc_resources.py
+          test -s rc_resources.py
+          python -m py_compile main.py backend.py rc_resources.py
+
+          # Qt's own QML syntax/type checker is authoritative for the frontend.
+          pyside6-qmllint --max-warnings -1 qml/Main.qml qml/components/*.qml
+
+          # Prove the source application can instantiate all four pages, all
+          # Shortcuts tabs and the calibration overlay without opening hardware
+          # sockets or requiring a display server.
+          QT_QPA_PLATFORM=offscreen python main.py --smoke-test
+
+      - name: Inspect deployment command
+        shell: bash
+        run: |
+          set -euxo pipefail
+          STAGE="$RUNNER_TEMP/hvp2p-stage"
+          cd "$STAGE"
+
+          # Create the deployment config explicitly. Qt documents --init as the
+          # deterministic way to create pysidedeploy.spec; do not depend on a
+          # dry-run side effect to create it.
+          rm -f pysidedeploy.spec
+          pyside6-deploy main.py --init
+          test -s pysidedeploy.spec
+
+          pyside6-deploy main.py -f --dry-run \
+            --name "HV P2P SRVR" \
+            --extra-ignore-dirs=.git,.github,assets,build,release,__pycache__ \
+            --extra-modules=Quick,QuickControls2,Qml,Gui,Network | tee deploy-dry-run.txt
+
+          # The generated Nuitka command must be scoped to the isolated stage,
+          # never the checked-out repository or its .github directory.
+          if grep -F "$GITHUB_WORKSPACE/.github" deploy-dry-run.txt; then
+            echo 'ERROR: deployment command references repository .github directory'
+            exit 1
+          fi
+
+
+          # pyside6-deploy creates pysidedeploy.spec on first use. Audit the
+          # generated config as another independent guard before compiling.
+          test -s pysidedeploy.spec
+          echo 'Generated deployment spec:'
+          cat pysidedeploy.spec
+          if grep -F "$GITHUB_WORKSPACE/.github" pysidedeploy.spec; then
+            echo 'ERROR: generated deployment spec references the checked-out repository .github directory'
+            exit 1
+          fi
+          grep -F "$STAGE" pysidedeploy.spec
+          grep -F 'HV_P2P_SRVR.pyproject' pysidedeploy.spec
 
       - name: Deploy Qt Quick macOS application
         shell: bash
         run: |
           set -euxo pipefail
-          # The explicit *.pyproject file limits deployment to actual application
-          # sources. The ignore list is a second guard against repository/build
-          # metadata being copied into Contents/MacOS.
+          STAGE="$RUNNER_TEMP/hvp2p-stage"
+          cd "$STAGE"
+
           pyside6-deploy main.py -f \
             --name "HV P2P SRVR" \
             --extra-ignore-dirs=.git,.github,assets,build,release,__pycache__ \
-            --extra-modules=Quick,Qml,Gui,Network
+            --extra-modules=Quick,QuickControls2,Qml,Gui,Network
 
-          APP_PATH="$(find . -maxdepth 2 -type d -name '*.app' -not -path './.git/*' | head -n 1)"
+          APP_PATH="$(find "$STAGE" -maxdepth 2 -type d -name '*.app' | head -n 1)"
           test -n "$APP_PATH"
+          test -d "$APP_PATH/Contents/MacOS"
+          test -f "$APP_PATH/Contents/Info.plist"
           echo "Built app: $APP_PATH"
 
-          # Fail immediately if source-control/build metadata has leaked into the
-          # application. This was the exact cause of the v26.08.17.03 codesign failure.
-          LEAKS="$(find "$APP_PATH/Contents" -type d \( -name '.github' -o -name '.git' -o -name '__pycache__' \) -print || true)"
+          # The exact v03/v04 failure is now checked again on the completed app.
+          LEAKS="$(find "$APP_PATH/Contents" \
+            \( -type d \( -name '.github' -o -name '.git' -o -name '__pycache__' -o -name 'tools' \) \
+            -o -type f \( -name '*.yml' -o -name '*.yaml' -o -name '*.pyproject' \) \) -print || true)"
           if [ -n "$LEAKS" ]; then
-            echo "ERROR: repository/build directories leaked into app bundle:"
+            echo 'ERROR: repository/build metadata leaked into app bundle:'
             echo "$LEAKS"
             exit 1
           fi
@@ -114,47 +191,61 @@ jobs:
           lipo -info "$EXE" || true
           file "$EXE" | grep -q 'x86_64'
 
-          # Do not edit Info.plist, icon, or bundle contents after pyside6-deploy.
-          # First verify the signature produced by the Qt/Nuitka deployment.
+          # Confirm Qt platform/QML runtime content exists before signing.
+          find "$APP_PATH/Contents" -iname '*qcocoa*' -o -iname '*QtQuick*' | head -n 40 || true
+
+          # No Info.plist/icon/resource edits are made after deployment. Preserve
+          # Qt/Nuitka's own bundle signature when it is already valid. Only fall
+          # back to a fresh ad-hoc development signature when verification says
+          # one is actually required. This is NOT Developer ID signing/notarising.
           if codesign --verify --deep --strict --verbose=2 "$APP_PATH"; then
-            echo "Qt/Nuitka bundle signature verified."
+            echo 'Qt/Nuitka bundle signature is already valid; leaving it untouched.'
           else
-            echo "Qt/Nuitka signature did not verify; applying a development-only ad-hoc signature."
+            echo 'Existing bundle signature is not valid; applying development ad-hoc signature.'
             codesign --force --deep --sign - --timestamp=none "$APP_PATH"
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           fi
 
-          mkdir -p release
-          rm -rf "release/HV P2P SRVR.app"
-          ditto "$APP_PATH" "release/HV P2P SRVR.app"
-          codesign --verify --deep --strict --verbose=2 "release/HV P2P SRVR.app"
+          # Frozen-app smoke test: use the Cocoa plugin that the real Mac app
+          # will use, rather than relying on a headless plugin that deployment
+          # might legitimately omit from a production bundle.
+          QT_QPA_PLATFORM=cocoa "$EXE" --smoke-test
+
+          # Copy the already verified app to the workspace. Nothing inside the
+          # app is modified after this point.
+          mkdir -p "$GITHUB_WORKSPACE/release"
+          rm -rf "$GITHUB_WORKSPACE/release/HV P2P SRVR.app"
+          ditto "$APP_PATH" "$GITHUB_WORKSPACE/release/HV P2P SRVR.app"
+          codesign --verify --deep --strict --verbose=2 "$GITHUB_WORKSPACE/release/HV P2P SRVR.app"
 
       - name: Package permission-safe application ZIP
         shell: bash
         run: |
           set -euxo pipefail
+          cd "$GITHUB_WORKSPACE"
           ZIP="HV P2P SRVR v${APP_VERSION} macOS Intel.zip"
           rm -f "$ZIP"
           ditto -c -k --sequesterRsrc --keepParent "release/HV P2P SRVR.app" "$ZIP"
 
           python - <<'PY'
           import os, zipfile
-          version=os.environ['APP_VERSION']
-          z=f'HV P2P SRVR v{version} macOS Intel.zip'
+          version = os.environ['APP_VERSION']
+          z = f'HV P2P SRVR v{version} macOS Intel.zip'
           with zipfile.ZipFile(z) as f:
-              names=f.namelist()
+              names = f.namelist()
           assert names, 'empty ZIP'
           assert all(n.startswith('HV P2P SRVR.app/') or n == 'HV P2P SRVR.app/' for n in names), names[:20]
-          forbidden=('.github/', '/.github/', '.git/', '/.git/', '__pycache__/')
-          assert not any(any(token in n for token in forbidden) for n in names), 'repository metadata leaked into release ZIP'
-          print('Application ZIP verified: one .app bundle only; no repository metadata.')
+          forbidden = ('.github/', '/.github/', '.git/', '/.git/', '__pycache__/', '.pyproject', '.yml', '.yaml')
+          bad = [n for n in names if any(token in n for token in forbidden)]
+          assert not bad, f'repository metadata leaked into release ZIP: {bad[:20]}'
+          print('Release ZIP verified: one .app bundle only.')
           PY
 
       - name: Upload GitHub Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HV-P2P-SRVR-v26.08.17.04-macOS-Intel
-          path: HV P2P SRVR v26.08.17.04 macOS Intel.zip
+          name: HV-P2P-SRVR-v26.08.17.05-macOS-Intel
+          path: HV P2P SRVR v26.08.17.05 macOS Intel.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
