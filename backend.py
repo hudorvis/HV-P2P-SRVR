@@ -132,7 +132,7 @@ class HVP2PBackend(QObject):
     logChanged = Signal()
     calibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.05", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.06", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)

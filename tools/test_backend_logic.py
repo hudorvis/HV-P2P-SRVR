@@ -6,7 +6,15 @@ import math
 import os
 import tempfile
 import time
+import sys
 from pathlib import Path
+
+# Make repository modules importable regardless of whether this test is run as
+# `python tools/test_backend_logic.py`, `python -m tools.test_backend_logic`, or
+# from a CI shell whose script directory becomes sys.path[0].
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # Keep test config isolated from the runner account.
 TMP_HOME = tempfile.TemporaryDirectory(prefix="hvp2p-test-home-")
@@ -20,7 +28,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.05", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.06", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).

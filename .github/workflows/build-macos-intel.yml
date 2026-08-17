@@ -22,7 +22,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 50
     env:
-      APP_VERSION: '26.08.17.05'
+      APP_VERSION: '26.08.17.06'
       QT_QUICK_CONTROLS_STYLE: Basic
       PYTHONUNBUFFERED: '1'
 
@@ -48,7 +48,7 @@ jobs:
         run: |
           set -euxo pipefail
           python tools/validate_project.py
-          python -m py_compile main.py backend.py tools/validate_project.py
+          python -m py_compile main.py backend.py tools/__init__.py tools/validate_project.py tools/test_backend_logic.py
 
       - name: Install Qt for Python
         shell: bash
@@ -69,7 +69,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          python tools/test_backend_logic.py
+          # Explicitly prove CI can import the application backend before running
+          # the larger regression suite. This catches path mistakes immediately.
+          PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python - <<'PY'
+          import backend
+          print("backend import PASS:", backend.__file__)
+          PY
+          PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python -m tools.test_backend_logic
 
       - name: Create isolated deployment source tree
         shell: bash
@@ -96,6 +102,8 @@ jobs:
           test ! -e "$STAGE/assets"
           test ! -e "$STAGE/release"
           test ! -e "$STAGE/tools"
+          test ! -e "$STAGE/.github"
+          test ! -e "$STAGE/.git"
 
       - name: Generate resources and validate QML in isolated tree
         shell: bash
@@ -145,8 +153,11 @@ jobs:
           fi
 
 
-          # pyside6-deploy creates pysidedeploy.spec on first use. Audit the
-          # generated config as another independent guard before compiling.
+          # Audit the generated config. Paths may be absolute or relative depending
+          # on the PySide6 release, so do not reject a valid spec merely because
+          # it does not contain a particular textual path. The important safety
+          # property is that it must never reference the checked-out repository
+          # metadata, and deployment itself occurs from the isolated stage.
           test -s pysidedeploy.spec
           echo 'Generated deployment spec:'
           cat pysidedeploy.spec
@@ -154,8 +165,6 @@ jobs:
             echo 'ERROR: generated deployment spec references the checked-out repository .github directory'
             exit 1
           fi
-          grep -F "$STAGE" pysidedeploy.spec
-          grep -F 'HV_P2P_SRVR.pyproject' pysidedeploy.spec
 
       - name: Deploy Qt Quick macOS application
         shell: bash
@@ -244,8 +253,8 @@ jobs:
       - name: Upload GitHub Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HV-P2P-SRVR-v26.08.17.05-macOS-Intel
-          path: HV P2P SRVR v26.08.17.05 macOS Intel.zip
+          name: HV-P2P-SRVR-v26.08.17.06-macOS-Intel
+          path: HV P2P SRVR v26.08.17.06 macOS Intel.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

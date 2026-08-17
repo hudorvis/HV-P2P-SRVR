@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.05"
+VERSION = "26.08.17.06"
 ERRORS: list[str] = []
 
 
@@ -149,6 +149,8 @@ require("pyside6-qmllint --max-warnings -1" in workflow, "QML syntax lint step m
 require("pyside6-deploy main.py --init" in workflow, "explicit deployment spec initialization missing")
 require("test -s pysidedeploy.spec" in workflow, "generated deployment spec audit missing")
 require("QT_QPA_PLATFORM=cocoa" in workflow, "frozen app is not smoke-tested with the real Cocoa platform plugin")
+require("python -m tools.test_backend_logic" in workflow, "backend tests are not run as an import-safe module")
+require("sys.path.insert(0, str(ROOT))" in read("tools/test_backend_logic.py"), "backend test does not add repository root to sys.path")
 
 if ERRORS:
     print("HV P2P SRVR preflight FAILED:", file=sys.stderr)
