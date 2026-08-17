@@ -3,6 +3,7 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Window 2.15
 import "components"
+import "pages"
 
 ApplicationWindow {
     id: window
@@ -30,6 +31,8 @@ ApplicationWindow {
     function changePage(i) {
         // Force any active HVField to commit BEFORE its page is hidden.
         editCommitSink.forceActiveFocus()
+        if (i === 1 && page !== 1)
+            backend.beginSetupEdit()
         page = i
     }
     function changeShortcutTab(i) {
@@ -242,15 +245,15 @@ ApplicationWindow {
                 }
             }
 
-            // -------------------- SETUP (functional interim visual) --------------------
+            // -------------------- SETUP --------------------
             Item {
                 anchors.fill:parent; visible:window.page===1
-                GridLayout {
-                    anchors.fill:parent; columns:2; rowSpacing:f(8); columnSpacing:f(8)
-                    Panel { Layout.fillWidth:true; Layout.fillHeight:true; Column{anchors.fill:parent;anchors.margins:f(20);spacing:f(14);Text{text:"CONTROLLER";color:lime;font.pixelSize:f(18);font.weight:Font.Medium}Text{text:"CTRL IP";color:muted;font.pixelSize:f(12)}HVField{width:parent.width;bindModel:true;modelText:backend.ctrlIp;onCommit:function(v){backend.setNetwork("CTRL",v)}}Text{text:"Direction";color:muted;font.pixelSize:f(12)}HVCombo{width:parent.width;model:["Normal","Inverted"];currentIndex:backend.ctrlInverted?1:0;onActivated:function(){backend.setDirection("CTRL",currentIndex===1)}}Text{text:"Qt Quick interim Setup page — final Setup visual design has not yet been locked.";color:muted;font.pixelSize:f(13);wrapMode:Text.WordWrap;width:parent.width}} }
-                    Panel { Layout.fillWidth:true; Layout.fillHeight:true; Column{anchors.fill:parent;anchors.margins:f(20);spacing:f(14);Text{text:"WINCH";color:lime;font.pixelSize:f(18);font.weight:Font.Medium}Text{text:"W1P IP";color:muted;font.pixelSize:f(12)}HVField{width:parent.width;bindModel:true;modelText:backend.w1pIp;onCommit:function(v){backend.setNetwork("W1P",v)}}Text{text:"Direction";color:muted;font.pixelSize:f(12)}HVCombo{width:parent.width;model:["Normal","Inverted"];currentIndex:backend.w1pInverted?1:0;onActivated:function(){backend.setDirection("W1P",currentIndex===1)}}Text{text:"CMD Units Per M";color:muted;font.pixelSize:f(12)}HVField{width:parent.width;bindModel:true;modelText:Number(backend.unitsPerM).toFixed(1);onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setUnitsPerM(n)}}} }
-                    Panel { Layout.fillWidth:true; Layout.fillHeight:true; Column{anchors.fill:parent;anchors.margins:f(20);spacing:f(14);Text{text:"MOTION PROFILES";color:lime;font.pixelSize:f(18);font.weight:Font.Medium}Text{text:"Mode 1 Name";color:muted}HVField{width:parent.width;bindModel:true;modelText:backend.driveMode1Name;onCommit:function(v){backend.renameDriveMode(0,v)}}Text{text:"Mode 2 Name";color:muted}HVField{width:parent.width;bindModel:true;modelText:backend.driveMode2Name;onCommit:function(v){backend.renameDriveMode(1,v)}}Text{text:"Full Setup motion-profile controls will be visually finalised on the locked Setup page.";color:muted;font.pixelSize:f(13);wrapMode:Text.WordWrap;width:parent.width}} }
-                    Panel { Layout.fillWidth:true; Layout.fillHeight:true; Column{anchors.fill:parent;anchors.margins:f(20);spacing:f(14);Text{text:"ACTIONS / STATUS";color:lime;font.pixelSize:f(18);font.weight:Font.Medium}Text{text:"Controller and winch network fields above are live and editable in this test build.";color:muted;font.pixelSize:f(13);wrapMode:Text.WordWrap;width:parent.width}} }
+                SetupPage {
+                    anchors.fill:parent
+                    scaleFactor:window.s
+                    fg:window.fg
+                    muted:window.muted
+                    green:window.green
                 }
             }
 
@@ -532,23 +535,27 @@ ApplicationWindow {
             // -------------------- LOG --------------------
             Item {
                 anchors.fill:parent; visible:window.page===3
-                Panel {
+                LogPage {
                     anchors.fill:parent
-                    Column {
-                        anchors.fill:parent; anchors.margins:f(16); spacing:f(8)
-                        Row { width:parent.width;height:f(32);Text{width:parent.width-f(190);anchors.verticalCenter:parent.verticalCenter;text:"LIVE LOG";color:lime;font.pixelSize:f(18);font.weight:Font.Medium}HVButton{width:f(90);height:parent.height;text:"Save Log";onClicked:backend.saveLog()}Item{width:f(8);height:1}HVButton{width:f(90);height:parent.height;text:"Clear Log";onClicked:backend.clearLog()} }
-                        Rectangle { width:parent.width;height:parent.height-f(40);color:"#070a0c";border.color:"#535a5e";border.width:1;radius:f(3);ScrollView{anchors.fill:parent;anchors.margins:f(8);TextArea{readOnly:true;text:backend.logText;color:"#d9dcdb";background:null;wrapMode:TextEdit.NoWrap;font.family:"Menlo";font.pixelSize:f(11);selectByMouse:true}} }
-                    }
+                    scaleFactor:window.s
+                    fg:window.fg
+                    muted:window.muted
+                    green:window.green
                 }
             }
         }
 
-        // Locked footer. Apply/Reset remain centred only on Free-D.
+        // Locked footer. Apply/Reset are centred on Setup and Free-D only.
         Panel {
             width:parent.width-parent.leftPadding-parent.rightPadding; height:f(42)
             Text { anchors.left:parent.left; anchors.leftMargin:f(14); anchors.verticalCenter:parent.verticalCenter; text:"SRVR Time:   "+backend.srvrTime; color:"#d7dbd9"; font.pixelSize:f(12) }
             Text { anchors.right:parent.right; anchors.rightMargin:f(14); anchors.verticalCenter:parent.verticalCenter; text:"Uptime:   "+backend.uptime; color:"#d7dbd9"; font.pixelSize:f(12) }
-            Row { visible:window.page===2; anchors.centerIn:parent; spacing:f(20); HVButton{width:f(145);height:f(30);text:"Apply";onClicked:backend.applyFreeDSettings()} HVButton{width:f(145);height:f(30);text:"Reset";onClicked:backend.resetFreeDSettings()} }
+            Row {
+                visible:window.page===1 || window.page===2
+                anchors.centerIn:parent; spacing:f(20)
+                HVButton{width:f(145);height:f(30);text:"Apply";onClicked:{editCommitSink.forceActiveFocus();if(window.page===1)backend.applySetupSettings();else backend.applyFreeDSettings()}}
+                HVButton{width:f(145);height:f(30);text:"Reset";onClicked:{editCommitSink.forceActiveFocus();if(window.page===1)backend.resetSetupSettings();else backend.resetFreeDSettings()}}
+            }
         }
     }
 

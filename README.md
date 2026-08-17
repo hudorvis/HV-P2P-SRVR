@@ -1,20 +1,18 @@
-# HV P2P SRVR v26.08.17.11 — Qt Quick macOS Intel test build
+# HV P2P SRVR v26.08.17.12 — Qt Quick macOS Intel test build
 
-This revision carries forward the working Qt Quick build/deployment path and applies the requested Run/Free-D refinements without changing the locked overall visual language.
+This revision uses the supplied working v26.08.17.11 application/source as the functional baseline and integrates the final locked Setup and Log designs without changing the locked Run or Free-D page bodies.
 
-## v26.08.17.11 changes
+## v26.08.17.12 changes
 
-- Renames the Free-D **Static Weight** control to **Skate Weight** throughout the visible Qt Quick interface.
-- Makes **Skate Weight / Cable Weight / Cable Tension / Highline Mode** explicit inputs to the single canonical cable-sag model used by:
-  - Run Side View,
-  - Free-D Side View,
-  - the live Free-D Y value, and
-  - transmitted Free-D Y after Apply.
-- Preserves the legacy engineering rule from the previous SRVR backend: Cable Weight and Cable Tension are entered **per individual highline cable**. Dual Highline shares the suspended Skate Weight between the two cables; each cable still carries its own self-weight at its entered tension.
-- Keeps backward configuration compatibility with older `static_weight_kg` / `static_weight_unit` keys while saving the new `skate_weight_kg` / `skate_weight_unit` names.
-- Aligns the **Drive Mode** controls in Shortcuts > System to the same 150 px control start used by Acceleration Mode, Battery Change Mode and Calibration Mode. The Mode 1 button therefore starts directly under the Battery Change `Off` button column.
-- Removes the `SKATE` text label from both shared Top View / Side View diagrams. The green downward arrow and moving skate/camera icon remain.
-- Expands regression/smoke tests so Skate Weight, Cable Weight, Cable Tension and Single/Dual Highline are each proven to change the calculated sag as expected, and verifies Free-D Y uses the exact same sag function as the displayed cable profile.
+- Integrates the final locked **Setup** page as a dedicated Qt Quick component, including CTRL/W1P link status, joystick deadband display/editing, both shared motion profiles, Drive Behaviour, AUX assignment panels, Actions, and Calibration summary.
+- Integrates the final locked **Log** page with Log View, Severity, Search, Save/Clear actions, structured live table, and the final System Summary using round status lights.
+- Keeps **Run** and **Free-D** page QML unchanged from the supplied v26.08.17.11 working source; only their shared shell now loads the new Setup/Log components.
+- Uses the same backend `drive_modes` objects for Setup and Run, so Mode 1/Mode 2 names and profile values cannot diverge between pages.
+- Adds Setup Apply/Reset to the common footer while preserving Free-D Apply/Reset; Run and Log continue to have no Apply/Reset buttons. `SRVR Time` remains left and `Uptime` right on all pages.
+- Preserves the proven CTRL/W1P safety, motion, calibration, Free-D, networking and configuration command paths. AUX assignments are persisted in configuration but this revision deliberately does not invent unverified AUX hardware commands.
+- Adds a parallel structured logging model for the final Log filters/table while preserving the existing plain-text log and Save Log output.
+- Extends source/frozen smoke checks and backend tests for shared Setup state, Setup Apply/Reset, Log filtering and final Setup/Log QML resources.
+- Corrects the macOS packaging path so the finished bundle explicitly uses the existing **P2P SRVR** icon and `HV P2P SRVR` display/name metadata before the final ad-hoc development signature.
 
 ## Build output
 
@@ -22,11 +20,11 @@ The workflow builds macOS Intel (`x86_64`) only. It does not perform Apple Devel
 
 After a successful GitHub Actions run, download the artifact:
 
-`HV-P2P-SRVR-v26.08.17.11-macOS-Intel`
+`HV-P2P-SRVR-v26.08.17.12-macOS-Intel`
 
 The GitHub artifact contains one transport ZIP:
 
-`HV P2P SRVR v26.08.17.11 macOS Intel.zip`
+`HV P2P SRVR v26.08.17.12 macOS Intel.zip`
 
 That inner ZIP contains the single `HV P2P SRVR.app` bundle and preserves the macOS executable permissions/bundle structure.
 

@@ -31,7 +31,7 @@ import PySide6.QtQuickControls2  # noqa: F401
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.11"
+APP_VERSION = "26.08.17.12"
 
 
 def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: HVP2PBackend) -> bool:
@@ -82,6 +82,36 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         backend.changeRampingMode("Near", "Distance")
         if abs(float(backend.nearRampValue) - 20.0) > 1e-6:
             raise RuntimeError("ramp Percentage->Distance conversion failed")
+
+        # Exercise the final Setup page data path. Mode names/profile values are
+        # deliberately shared with the Run page rather than duplicated state.
+        backend.beginSetupEdit()
+        old_ctrl_ip = backend.ctrlIp
+        backend.setNetwork("CTRL", "172.20.1.199")
+        backend.setJoystickDeadband(4.5)
+        backend.renameDriveMode(0, "Shared Smoke Mode")
+        backend.setDriveModeValue(0, "max_speed_mps", 20.0)
+        backend.setAuxAssignment("CTRL", 0, "Drive Mode")
+        if backend.driveMode1Name != backend.driveModes[0]["name"]:
+            raise RuntimeError("Setup/Run Mode 1 name is not shared")
+        if abs(float(backend.driveModes[0]["max_speed_mps"]) - 20.0) > 1e-6:
+            raise RuntimeError("Setup motion-profile value did not update shared drive mode")
+        backend.resetSetupSettings()
+        if backend.ctrlIp != old_ctrl_ip:
+            raise RuntimeError("Setup Reset failed")
+        backend.beginSetupEdit()
+        backend.setJoystickDeadband(4.0)
+        backend.applySetupSettings()
+        if abs(float(backend.joystickDeadband) - 4.0) > 1e-6:
+            raise RuntimeError("Setup Apply failed")
+
+        # Exercise the structured Log page model without changing legacy text export.
+        backend._log("[W1P] RS485 disconnected warning")
+        backend._log("[Free-D] packet received")
+        if not backend.filteredLogEntries("Network", "Warning", "rs485"):
+            raise RuntimeError("Log Network/Warning/Search filter failed")
+        if not backend.filteredLogEntries("Free-D", "All", "packet"):
+            raise RuntimeError("Log Free-D filter failed")
 
         # Exercise staged Free-D editing plus Apply/Reset.
         backend.setFreeDNetwork("Output", "IP", "172.20.1.30")
@@ -146,7 +176,7 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         print(f"SMOKE FAIL: {exc}", file=sys.stderr)
         return False
 
-    print("SMOKE PASS: QML pages, editable controls, Free-D Apply/Reset, shortcuts and calibration overlay instantiated")
+    print("SMOKE PASS: locked pages, shared Setup backend, structured Log, Free-D Apply/Reset, shortcuts and calibration overlay instantiated")
     return True
 
 

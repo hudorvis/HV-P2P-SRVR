@@ -28,7 +28,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.11", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.12", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -107,6 +107,49 @@ try:
     assert b.ctrlInverted and b.w1pInverted
     assert abs(b.unitsPerM - 22000.5) < 1e-9
     assert b.accelerationMode == "Power" and b.activeDriveMode == 1
+
+    # Final Setup page shares the exact same drive-mode objects used by Run.
+    b.beginSetupEdit()
+    original_ctrl_ip = b.ctrlIp
+    original_mode_1 = b.driveMode1Name
+    b.setNetwork("CTRL", "172.20.1.210")
+    b.setJoystickDeadband(3.5)
+    b.setDriveModeValue(0, "max_speed_mps", 18.0)
+    b.setDriveModeValue(0, "goto_speed_mps", 7.0)
+    b.renameDriveMode(0, "Shared Mode")
+    b.setAuxAssignment("CTRL", 0, "Drive Mode")
+    assert b.driveModes[0]["name"] == b.driveMode1Name == "Shared Mode"
+    assert abs(float(b.driveModes[0]["max_speed_mps"]) - 18.0) < 1e-9
+    assert abs(float(b.joystickDeadband) - 3.5) < 1e-9
+    assert b.ctrlAuxAssignments[0] == "Drive Mode"
+    b.resetSetupSettings()
+    assert b.ctrlIp == original_ctrl_ip and b.driveMode1Name == original_mode_1
+    b.beginSetupEdit()
+    b.setJoystickDeadband(4.0)
+    b.applySetupSettings()
+    assert abs(float(b.joystickDeadband) - 4.0) < 1e-9
+
+    # The deadband remains the proven 5% by default, but is now the Setup value.
+    b._not_calibrated = False
+    now = time.time(); b._ctrl_rx_times.clear(); b._ctrl_rx_times.extend([now - 0.05, now])
+    b.w1p.last_seen = now; b.winch_rs_status = "Connected"; b._ctrl_flags = 0
+    b.state.near_limit.position_m = 0.0; b.state.far_limit.position_m = 100.0; b.state.pos_m = 50.0
+    b._ctrl_axis = 0.03
+    b.goto_target_m = None
+    b.last_sent_vel = 0.5
+    b.requested_speed_mps = 0.5
+    b._motion_tick()
+    assert abs(b.requested_speed_mps) < 1e-9, "configured joystick deadband not applied"
+
+    # Locked Log page filters operate over a parallel structured model while the
+    # original plain text log remains available for Save Log.
+    b._log("[W1P] RS485 disconnected warning")
+    b._log("[Free-D] packet received")
+    net = b.filteredLogEntries("Network", "Warning", "rs485")
+    freed = b.filteredLogEntries("Free-D", "All", "packet")
+    assert net and net[-1]["source"] == "W1P"
+    assert freed and freed[-1]["source"] == "FREE-D"
+    assert "RS485 disconnected warning" in b.logText
 
     old_vis = bool(b.preset_visible[0])
     b.togglePresetVisible(0)

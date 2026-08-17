@@ -4,6 +4,8 @@
     "backend.py",
     "resources.qrc",
     "qml/Main.qml",
+    "qml/pages/SetupPage.qml",
+    "qml/pages/LogPage.qml",
     "qml/components/Panel.qml",
     "qml/components/HVButton.qml",
     "qml/components/HVTab.qml",

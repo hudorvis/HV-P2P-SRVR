@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.11"
+VERSION = "26.08.17.12"
 ERRORS: list[str] = []
 
 
@@ -32,6 +32,8 @@ def read(rel: str) -> str:
 main = read("main.py")
 backend = read("backend.py")
 qml_main = read("qml/Main.qml")
+qml_setup = read("qml/pages/SetupPage.qml")
+qml_log = read("qml/pages/LogPage.qml")
 workflow = read(".github/workflows/build-macos-intel.yml")
 project_text = read("HV_P2P_SRVR.pyproject")
 qrc_text = read("resources.qrc")
@@ -80,6 +82,8 @@ try:
     qroot = ET.fromstring(qrc_text)
     qfiles = [n.text.strip() for n in qroot.findall(".//file") if n.text]
     require("qml/Main.qml" in qfiles, "resources.qrc does not contain qml/Main.qml")
+    require("qml/pages/SetupPage.qml" in qfiles, "resources.qrc does not contain final SetupPage.qml")
+    require("qml/pages/LogPage.qml" in qfiles, "resources.qrc does not contain final LogPage.qml")
     for f in qfiles:
         require((ROOT / f).is_file(), f"resources.qrc missing file: {f}")
 except Exception as exc:
@@ -232,6 +236,36 @@ require('onCableProfileChanged: canvas.requestPaint()' in span_qml and
         'onCurrentPositionChanged: canvas.requestPaint()' in span_qml,
         "SpanDiagram property-driven repaint hooks are missing")
 
+# Final locked Setup / Log integration contract. Run and Free-D remain in Main.qml
+# and are guarded separately above; Setup/Log are isolated components so their
+# integration cannot accidentally rewrite those locked bodies.
+require('import "pages"' in qml_main and 'SetupPage {' in qml_main and 'LogPage {' in qml_main,
+        "final Setup/Log page components are not integrated into the shared shell")
+require("functional interim visual" not in qml_main and "final Setup visual design has not yet been locked" not in qml_main,
+        "interim Setup implementation remains in Main.qml")
+for token in (
+    "CTRL-TS Link", "ADS1115 Link", "JOYSTICK CALIBRATION", "W1P-TS Link", "RS485 Link",
+    "MOTION PROFILES", "DRIVE BEHAVIOUR", "CTRL-TS AUX ASSIGN", "W1P-TS AUX ASSIGN",
+    "LIMIT CALIBRATION", "WINCH CALIBRATION", "SAVE CONFIG", "LOAD CONFIG",
+):
+    require(token in qml_setup, f"final Setup content missing: {token}")
+for token in ("LOG VIEW", "SEVERITY", "SEARCH", "ACTIONS", "LIVE LOG", "SYSTEM SUMMARY", "Backend State", "System Uptime"):
+    require(token in qml_log, f"final Log content missing: {token}")
+require('width:(parent.width-root.f(10))*0.245' in qml_log and 'width:(parent.width-root.f(30))*0.245' in qml_log,
+        "Log System Summary is not aligned to the Actions panel width ratio")
+require('visible:window.page===1 || window.page===2' in qml_main,
+        "footer Apply/Reset must be visible on Setup and Free-D only")
+require('SRVR Time:' in qml_main and 'Uptime:' in qml_main,
+        "shared footer time/uptime placement missing")
+for token in (
+    "def driveModes", "def setDriveModeValue", "def beginSetupEdit", "def applySetupSettings", "def resetSetupSettings",
+    "def ctrlAuxAssignments", "def w1pAuxAssignments", "def calibrationSummary",
+    "def filteredLogEntries", "def logRevision", "def logCount",
+):
+    require(token in backend, f"final Setup/Log backend surface missing: {token}")
+require('pyside6-qmllint --max-warnings -1 qml/Main.qml qml/components/*.qml qml/pages/*.qml' in workflow,
+        "CI qmllint does not include final Setup/Log pages")
+
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.
 for token in (
@@ -271,6 +305,11 @@ require('codesign --verify --deep --strict --verbose=2 "$ROUNDTRIP_APP"' in work
         "round-trip extracted app signature verification missing")
 require('xattr -cr "$APP_PATH" || true' in workflow,
         "extended-attribute cleanup before final app signature is missing")
+require('cp assets/HV_P2P_SRVR_icon.png "$STAGE/HV_P2P_SRVR_icon.png"' in workflow and
+        'iconutil -c icns' in workflow and 'CFBundleIconFile' in workflow,
+        "P2P SRVR bundle icon is not restored during packaging")
+require('CFBundleDisplayName' in workflow and "HV P2P SRVR'" in workflow,
+        "HV P2P SRVR bundle display metadata is not enforced")
 require('QT_QPA_PLATFORM=cocoa "$ROUNDTRIP_EXE" --smoke-test' in workflow,
         "round-trip extracted app smoke test missing")
 

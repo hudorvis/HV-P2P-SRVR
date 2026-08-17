@@ -11,6 +11,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 import json, math, os, queue, socket, struct, threading, time
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer
@@ -133,19 +134,34 @@ class HVP2PBackend(QObject):
     logChanged = Signal()
     calibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.11", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.12", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
         self.started = time.time()
         self._lock = threading.RLock()
         self._logs = deque(maxlen=1200)
+        # Keep the proven plain-text log untouched for disk export while also
+        # maintaining structured entries for the locked Log page filters/table.
+        self._log_entries = deque(maxlen=1200)
+        self._log_revision = 0
         self.state = WinchState()
         self.ctrl_ip = "172.20.1.101"
         self.w1p_ip = "172.20.1.102"
         self.w1p_port = 5000
         self.reverse_joystick = False
         self.reverse_motor = False
+        self.joystick_deadband_pct = JOY_DEADBAND_PCT
+        self.position_source = "Encoder"
+        self.ctrl_aux_assignments = [
+            "Drive Mode", "Near Limit Save", "Preset 5 Recall",
+            "Battery Change Mode", "Ref Point Slip",
+        ]
+        self.w1p_aux_assignments = [
+            "Acceleration Mode", "Far Limit Recall", "Preset 2 Slip",
+            "Ref Point Save", "Preset 10 Recall",
+        ]
+        self._limit_raw = {"near": None, "ref": None, "far": None}
         self.winch_units_per_m = 21220.7
         self.max_speed_mps = 25.0
         self.goto_speed_mps = 7.5
@@ -242,6 +258,7 @@ class HVP2PBackend(QObject):
         self._config_path = self._config_file_path()
         self._load_config()
         self._saved_freed_snapshot = self._freed_snapshot()
+        self._saved_setup_snapshot = self._setup_snapshot()
         self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
         if not self.smoke_test:
             self.w1p.start()
@@ -261,9 +278,62 @@ class HVP2PBackend(QObject):
         except Exception: home = Path.home()
         return home / "config.json"
 
+    @staticmethod
+    def _classify_log_message(msg: str):
+        """Return (level, source, view, clean_message) without changing saved logs."""
+        text = str(msg).strip()
+        source = "SYSTEM"
+        clean = text
+        if text.startswith("[") and "]" in text:
+            tag, clean = text[1:].split("]", 1)
+            clean = clean.strip()
+            tag_u = tag.upper()
+            if "FREE-D" in tag_u:
+                source = "FREE-D"
+            elif "W1P" in tag_u:
+                source = "W1P"
+            elif "CTRL" in tag_u or "ADS1115" in tag_u:
+                source = "CTRL"
+            elif "CALIBRATION" in tag_u:
+                source = "CAL"
+            elif "CONFIG" in tag_u:
+                source = "CONFIG"
+            else:
+                source = "SYSTEM"
+
+        hay = (text + " " + clean).lower()
+        if any(k in hay for k in ("fault", "failed", "failure", "error", "estop", "e-stop", "overcurrent")):
+            level = "FAULT"
+        elif any(k in hay for k in ("warn", "warning", "rejected", "timeout", "mismatch", "disconnected")):
+            level = "WARN"
+        else:
+            level = "INFO"
+
+        if source == "FREE-D":
+            view = "Free-D"
+        elif source in ("CTRL", "W1P") or any(k in hay for k in ("udp", "network", "rs485", "connected", "link")):
+            view = "Network"
+        elif any(k in hay for k in ("estop", "e-stop", "fault", "safety", "limit", "servo", "brake")):
+            view = "Safety"
+        else:
+            view = "Live"
+        return level, source, view, clean
+
     def _log(self, msg):
-        line = f"{time.strftime('%H:%M:%S')}  {str(msg).strip()}"
-        with self._lock: self._logs.append(line)
+        raw = str(msg).strip()
+        line = f"{time.strftime('%H:%M:%S')}  {raw}"
+        level, source, view, clean = self._classify_log_message(raw)
+        entry = {
+            "time": datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            "level": level,
+            "source": source,
+            "view": view,
+            "message": clean or raw,
+        }
+        with self._lock:
+            self._logs.append(line)
+            self._log_entries.append(entry)
+            self._log_revision += 1
         self.logChanged.emit()
 
     # --- controller ---
@@ -589,9 +659,10 @@ class HVP2PBackend(QObject):
             return
 
         axis = self._ctrl_axis * (-1 if self.reverse_joystick else 1)
-        if abs(axis*100) < JOY_DEADBAND_PCT:
+        deadband = max(0.0, min(25.0, float(self.joystick_deadband_pct)))
+        if abs(axis*100) < deadband:
             axis = 0.0
-        if self.goto_target_m is not None and abs(axis*100) >= JOY_DEADBAND_PCT:
+        if self.goto_target_m is not None and abs(axis*100) >= deadband:
             self.goto_target_m = None
 
         service = self._service_override_active()
@@ -1077,6 +1148,44 @@ class HVP2PBackend(QObject):
         self._freed_lens_auto_seen[mn] = v if old_min is None else min(float(old_min), v)
         self._freed_lens_auto_seen[mx] = v if old_max is None else max(float(old_max), v)
 
+    def _setup_snapshot(self) -> dict:
+        return {
+            "ctrl_ip": str(self.ctrl_ip),
+            "w1p_ip": str(self.w1p_ip),
+            "reverse_joystick": bool(self.reverse_joystick),
+            "reverse_motor": bool(self.reverse_motor),
+            "joystick_deadband_pct": float(self.joystick_deadband_pct),
+            "position_source": str(self.position_source),
+            "units_per_m": float(self.winch_units_per_m),
+            "drive_modes": [dict(x) for x in self.drive_modes],
+            "active_drive_mode": int(self.active_drive_mode),
+            "acceleration_mode": str(self.acceleration_mode),
+            "battery_change_mode": bool(self.battery_change_mode),
+            "ctrl_aux_assignments": list(self.ctrl_aux_assignments),
+            "w1p_aux_assignments": list(self.w1p_aux_assignments),
+        }
+
+    def _restore_setup_snapshot(self, snap: dict) -> None:
+        self.ctrl_ip = str(snap.get("ctrl_ip", self.ctrl_ip))
+        self.w1p_ip = str(snap.get("w1p_ip", self.w1p_ip))
+        self.reverse_joystick = bool(snap.get("reverse_joystick", self.reverse_joystick))
+        self.reverse_motor = bool(snap.get("reverse_motor", self.reverse_motor))
+        self.joystick_deadband_pct = max(0.0, min(25.0, float(snap.get("joystick_deadband_pct", self.joystick_deadband_pct))))
+        self.position_source = "Encoder"
+        self.winch_units_per_m = max(1.0, float(snap.get("units_per_m", self.winch_units_per_m)))
+        self.drive_modes = self._normalise_drive_modes(snap.get("drive_modes", self.drive_modes))
+        self.active_drive_mode = 0 if int(snap.get("active_drive_mode", self.active_drive_mode)) <= 0 else 1
+        self.acceleration_mode = "Power" if str(snap.get("acceleration_mode", self.acceleration_mode)).lower().startswith("power") else "Speed"
+        self.battery_change_mode = bool(snap.get("battery_change_mode", self.battery_change_mode))
+        self.ctrl_aux_assignments = [str(x) for x in self._normalise_list(snap.get("ctrl_aux_assignments"), self.ctrl_aux_assignments, 5)]
+        self.w1p_aux_assignments = [str(x) for x in self._normalise_list(snap.get("w1p_aux_assignments"), self.w1p_aux_assignments, 5)]
+        self._apply_active_drive_profile(sync=False)
+        self._ctrl_rx_times.clear()
+        self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
+        if not self.smoke_test:
+            self._sync_w1p_settings()
+            self._sync_service_mode_to_winch(force=True)
+
     def _load_config(self):
         try:
             if not self._config_path.exists():
@@ -1090,6 +1199,12 @@ class HVP2PBackend(QObject):
             self.w1p_ip = str(c.get("w1p_ip", self.w1p_ip) or self.w1p_ip)
             self.reverse_joystick = bool(c.get("reverse_joystick", self.reverse_joystick))
             self.reverse_motor = bool(c.get("reverse_motor", self.reverse_motor))
+            self.joystick_deadband_pct = max(0.0, min(25.0, float(c.get("joystick_deadband_pct", self.joystick_deadband_pct))))
+            # Encoder is the currently proven position source. Persist the field
+            # for the locked Setup control without inventing an unverified source.
+            self.position_source = "Encoder"
+            self.ctrl_aux_assignments = [str(x) for x in self._normalise_list(c.get("ctrl_aux_assignments"), self.ctrl_aux_assignments, 5)]
+            self.w1p_aux_assignments = [str(x) for x in self._normalise_list(c.get("w1p_aux_assignments"), self.w1p_aux_assignments, 5)]
             self.winch_units_per_m = max(1.0, float(c.get("units_per_m", self.winch_units_per_m)))
 
             self.drive_modes = self._normalise_drive_modes(c.get("drive_modes"))
@@ -1112,6 +1227,12 @@ class HVP2PBackend(QObject):
             self.state.near_limit.position_m = float(lim.get("near", 0.0))
             self.state.far_limit.position_m = float(lim.get("far", 100.0))
             self.state.ref_point.position_m = float(lim.get("ref", 50.0))
+            raw = lim.get("raw", {}) if isinstance(lim.get("raw", {}), dict) else {}
+            for key in ("near", "ref", "far"):
+                try:
+                    self._limit_raw[key] = None if raw.get(key) is None else int(raw.get(key))
+                except Exception:
+                    self._limit_raw[key] = None
             for lp,key in ((self.state.near_limit,"nearRamp"),(self.state.far_limit,"farRamp")):
                 r = lim.get(key, {}) if isinstance(lim.get(key, {}), dict) else {}
                 lp.ramp_mode = "Percentage" if str(r.get("mode", "Distance")).lower().startswith("percent") else "Distance"
@@ -1187,6 +1308,10 @@ class HVP2PBackend(QObject):
                 "w1p_ip": self.w1p_ip,
                 "reverse_joystick": self.reverse_joystick,
                 "reverse_motor": self.reverse_motor,
+                "joystick_deadband_pct": self.joystick_deadband_pct,
+                "position_source": self.position_source,
+                "ctrl_aux_assignments": self.ctrl_aux_assignments,
+                "w1p_aux_assignments": self.w1p_aux_assignments,
                 "units_per_m": self.winch_units_per_m,
                 "drive_modes": self.drive_modes,
                 "active_drive_mode": self.active_drive_mode,
@@ -1199,6 +1324,7 @@ class HVP2PBackend(QObject):
                     "near": self.state.near_limit.position_m,
                     "far": self.state.far_limit.position_m,
                     "ref": self.state.ref_point.position_m,
+                    "raw": dict(self._limit_raw),
                     "nearRamp": {"mode":self.state.near_limit.ramp_mode,"distance":self.state.near_limit.ramp_distance_m,"percentage":self.state.near_limit.ramp_percentage},
                     "farRamp": {"mode":self.state.far_limit.ramp_mode,"distance":self.state.far_limit.ramp_distance_m,"percentage":self.state.far_limit.ramp_percentage},
                 },
@@ -1244,6 +1370,16 @@ class HVP2PBackend(QObject):
     def freeDActive(self): return bool(self.freed_input_last_rx and time.time()-self.freed_input_last_rx<2.0)
     @Property(float, notify=stateChanged)
     def freeDFps(self): return float(self.freed_in_fps)
+    @Property(bool, notify=stateChanged)
+    def ctrlTsConnected(self): return self._ctrl_connected()
+    @Property(bool, notify=stateChanged)
+    def ads1115Connected(self): return bool(self._ctrl_connected() and not (self._ctrl_flags & FLAG_ADS1115_FAULT))
+    @Property(bool, notify=stateChanged)
+    def w1pTsConnected(self): return bool(self.w1p.connected)
+    @Property(bool, notify=stateChanged)
+    def rs485Connected(self): return bool(self.w1p.connected and self.winch_rs_status == "Connected")
+    @Property(float, notify=stateChanged)
+    def joystickValue(self): return float(self._ctrl_axis)
     @Property(bool, notify=stateChanged)
     def systemReady(self): return not self.state.estop_active
     @Property(str, notify=stateChanged)
@@ -1369,6 +1505,30 @@ class HVP2PBackend(QObject):
     def w1pInverted(self): return bool(self.reverse_motor)
     @Property(float, notify=configChanged)
     def unitsPerM(self): return float(self.winch_units_per_m)
+    @Property(float, notify=configChanged)
+    def joystickDeadband(self): return float(self.joystick_deadband_pct)
+    @Property(str, notify=configChanged)
+    def positionSource(self): return str(self.position_source)
+    @Property('QVariantList', notify=configChanged)
+    def driveModes(self): return [dict(x) for x in self.drive_modes]
+    @Property('QVariantList', notify=configChanged)
+    def ctrlAuxAssignments(self): return list(self.ctrl_aux_assignments)
+    @Property('QVariantList', notify=configChanged)
+    def w1pAuxAssignments(self): return list(self.w1p_aux_assignments)
+    @Property('QVariantMap', notify=configChanged)
+    def calibrationSummary(self):
+        def item(lp, raw_key):
+            is_set = lp.position_m is not None
+            return {
+                "set": bool(is_set),
+                "position": float(lp.position_m or 0.0),
+                "raw": "—" if self._limit_raw.get(raw_key) is None else str(self._limit_raw.get(raw_key)),
+            }
+        return {
+            "near": item(self.state.near_limit, "near"),
+            "ref": item(self.state.ref_point, "ref"),
+            "far": item(self.state.far_limit, "far"),
+        }
     @Property(bool, notify=configChanged)
     def freeDInputEnabled(self): return bool(self.freed_input_enabled)
     @Property(str, notify=configChanged)
@@ -1419,6 +1579,32 @@ class HVP2PBackend(QObject):
     @Property(str, notify=logChanged)
     def logText(self):
         with self._lock: return "\n".join(self._logs)
+    @Property(int, notify=logChanged)
+    def logRevision(self): return int(self._log_revision)
+    @Property(int, notify=logChanged)
+    def logCount(self):
+        with self._lock: return len(self._log_entries)
+    @Slot(str, str, str, result='QVariantList')
+    def filteredLogEntries(self, view, severity, search):
+        view = str(view or "Live")
+        severity = str(severity or "All")
+        needle = str(search or "").strip().casefold()
+        sev_map = {"Info":"INFO", "Warning":"WARN", "Fault":"FAULT"}
+        wanted_level = sev_map.get(severity)
+        with self._lock:
+            entries = [dict(x) for x in self._log_entries]
+        out = []
+        for entry in entries:
+            if view != "Live" and entry.get("view") != view:
+                continue
+            if wanted_level and entry.get("level") != wanted_level:
+                continue
+            if needle:
+                hay = " ".join(str(entry.get(k, "")) for k in ("time", "level", "source", "message")).casefold()
+                if needle not in hay:
+                    continue
+            out.append(entry)
+        return out
     @Property(str, notify=calibrationChanged)
     def calibrationType(self): return self.calibration_type
     @Property(int, notify=calibrationChanged)
@@ -1494,6 +1680,9 @@ class HVP2PBackend(QObject):
             return
         lp = self._limit(which)
         lp.position_m = float(self.state.pos_m)
+        key = "near" if lp is self.state.near_limit else "far" if lp is self.state.far_limit else "ref"
+        raw = getattr(self, "_last_raw_pos", None)
+        self._limit_raw[key] = None if raw is None else int(raw)
         self._save_config(); self._sync_w1p_settings(); self._notify_config()
 
     @Slot(str)
@@ -1645,6 +1834,8 @@ class HVP2PBackend(QObject):
             if self.calibration_step == 0:
                 # Near establishes the operator coordinate system: Near = 0.00 m.
                 self.state.near_limit.position_m = 0.0
+                raw = getattr(self, "_last_raw_pos", None)
+                self._limit_raw["near"] = None if raw is None else int(raw)
                 self._sync_position(0.0)
                 self.calibration_step = 1
                 self.calibration_title = "Set Far Limit"
@@ -1652,6 +1843,8 @@ class HVP2PBackend(QObject):
                 # After Near was synchronised to zero, Far is a positive span distance.
                 far = abs(float(self.state.pos_m or 0.0))
                 self.state.far_limit.position_m = max(0.01, far)
+                raw = getattr(self, "_last_raw_pos", None)
+                self._limit_raw["far"] = None if raw is None else int(raw)
                 self.state.total_length_m = self.state.far_limit.position_m
                 self._sync_position(self.state.far_limit.position_m)
                 self.calibration_step = 2
@@ -1659,6 +1852,8 @@ class HVP2PBackend(QObject):
             elif self.calibration_step == 2:
                 ref = abs(float(self.state.pos_m or 0.0))
                 self.state.ref_point.position_m = min(max(0.0, ref), float(self.state.far_limit.position_m or ref))
+                raw = getattr(self, "_last_raw_pos", None)
+                self._limit_raw["ref"] = None if raw is None else int(raw)
                 self._sync_position(self.state.ref_point.position_m)
                 self._not_calibrated = False
                 self._sync_w1p_settings()
@@ -1723,6 +1918,96 @@ class HVP2PBackend(QObject):
     def setUnitsPerM(self,v):
         self.winch_units_per_m = max(1.0,float(v))
         self._sync_w1p_settings(); self._save_config(); self._notify_config()
+
+    @Slot()
+    def beginSetupEdit(self):
+        """Capture the current applied Setup values when the operator opens Setup."""
+        self._saved_setup_snapshot = self._setup_snapshot()
+
+    @Slot()
+    def applySetupSettings(self):
+        self._save_config()
+        self._saved_setup_snapshot = self._setup_snapshot()
+        self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
+        if not self.smoke_test:
+            self._sync_w1p_settings()
+            self._sync_service_mode_to_winch(force=True)
+        self._log("[Config] Setup settings applied")
+        self._notify_config()
+
+    @Slot()
+    def resetSetupSettings(self):
+        self._restore_setup_snapshot(dict(self._saved_setup_snapshot))
+        self._save_config()
+        self._log("[Config] Setup edits reset")
+        self._notify_config()
+
+    @Slot()
+    def saveConfig(self):
+        # The locked ACTIONS button means save the current full configuration.
+        self._save_config(include_staged_freed=False)
+        self._saved_setup_snapshot = self._setup_snapshot()
+        self._log("[Config] configuration saved")
+        self._notify_config()
+
+    @Slot()
+    def loadConfig(self):
+        self._load_config()
+        self._saved_setup_snapshot = self._setup_snapshot()
+        self._saved_freed_snapshot = self._freed_snapshot()
+        self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
+        if not self.smoke_test:
+            self._sync_w1p_settings()
+            self._sync_service_mode_to_winch(force=True)
+            self._start_freed_input()
+        self._log("[Config] configuration loaded")
+        self._notify_config()
+
+    @Slot(float)
+    def setJoystickDeadband(self, value):
+        self.joystick_deadband_pct = max(0.0, min(25.0, float(value)))
+        self._save_config(); self._notify_config()
+
+    @Slot(str)
+    def setPositionSource(self, value):
+        # Only the proven Encoder source is currently implemented.
+        self.position_source = "Encoder"
+        self._save_config(); self._notify_config()
+
+    @Slot(int, str, float)
+    def setDriveModeValue(self, index, key, value):
+        i = int(index)
+        key = str(key)
+        allowed = {"max_speed_mps", "goto_speed_mps", "accel_mps2", "decel_mps2", "crossover_mps2", "stop_decel_mps2"}
+        if i not in (0, 1) or key not in allowed:
+            return
+        v = max(0.01, float(value))
+        self.drive_modes[i][key] = v
+        if key == "max_speed_mps":
+            self.drive_modes[i]["goto_speed_mps"] = min(float(self.drive_modes[i]["goto_speed_mps"]), v)
+        elif key == "goto_speed_mps":
+            self.drive_modes[i][key] = min(v, float(self.drive_modes[i]["max_speed_mps"]))
+        if i == self.active_drive_mode:
+            self._apply_active_drive_profile(sync=True)
+        self._save_config(); self._notify_config()
+
+    @Slot(str, int, str)
+    def setAuxAssignment(self, which, index, value):
+        i = int(index)
+        if not 0 <= i < 5:
+            return
+        target = self.ctrl_aux_assignments if str(which).upper().startswith("CTRL") else self.w1p_aux_assignments
+        target[i] = str(value)
+        # Assignment persistence is intentionally separate from protocol handling:
+        # no unverified AUX hardware command is introduced in this revision.
+        self._save_config(); self._notify_config()
+
+    @Slot()
+    def openJoystickCalibration(self):
+        # The final Setup design exposes this action, but the supplied working
+        # backend has no separate joystick-calibration protocol/wizard to invoke.
+        # Keep the control non-destructive rather than inventing hardware logic.
+        self._log("[Calibration] Joystick calibration requested")
 
     @Slot(str,bool)
     def setFreeDEnabled(self, which, enabled):
@@ -1847,6 +2132,8 @@ class HVP2PBackend(QObject):
     def clearLog(self):
         with self._lock:
             self._logs.clear()
+            self._log_entries.clear()
+            self._log_revision += 1
         self.logChanged.emit()
 
     @Slot(str)

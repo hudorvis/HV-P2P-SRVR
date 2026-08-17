@@ -22,7 +22,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 50
     env:
-      APP_VERSION: '26.08.17.11'
+      APP_VERSION: '26.08.17.12'
       QT_QUICK_CONTROLS_STYLE: Basic
       PYTHONUNBUFFERED: '1'
 
@@ -91,6 +91,7 @@ jobs:
           # directory physically cannot be bundled.
           cp main.py backend.py resources.qrc HV_P2P_SRVR.pyproject "$STAGE/"
           cp -R qml "$STAGE/"
+          cp assets/HV_P2P_SRVR_icon.png "$STAGE/HV_P2P_SRVR_icon.png"
 
           echo 'Staged files:'
           find "$STAGE" -maxdepth 4 -print | sort
@@ -119,7 +120,7 @@ jobs:
           python -m py_compile main.py backend.py rc_resources.py
 
           # Qt's own QML syntax/type checker is authoritative for the frontend.
-          pyside6-qmllint --max-warnings -1 qml/Main.qml qml/components/*.qml
+          pyside6-qmllint --max-warnings -1 qml/Main.qml qml/components/*.qml qml/pages/*.qml
 
           # Prove the source application can instantiate all four pages, all
           # Shortcuts tabs and the calibration overlay without opening hardware
@@ -184,6 +185,37 @@ jobs:
           test -f "$APP_PATH/Contents/Info.plist"
           echo "Built app: $APP_PATH"
 
+          # Restore the project bundle identity/icon explicitly. The supplied
+          # v26.08.17.11 working app still carried generic `main` display metadata
+          # and PySide's default icon even though the source already contains the
+          # approved P2P SRVR icon asset. Perform these edits before final signing.
+          ICONSET="$STAGE/HV_P2P_SRVR.iconset"
+          rm -rf "$ICONSET"
+          mkdir -p "$ICONSET"
+          sips -z 16 16     HV_P2P_SRVR_icon.png --out "$ICONSET/icon_16x16.png" >/dev/null
+          sips -z 32 32     HV_P2P_SRVR_icon.png --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+          sips -z 32 32     HV_P2P_SRVR_icon.png --out "$ICONSET/icon_32x32.png" >/dev/null
+          sips -z 64 64     HV_P2P_SRVR_icon.png --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+          sips -z 128 128   HV_P2P_SRVR_icon.png --out "$ICONSET/icon_128x128.png" >/dev/null
+          sips -z 256 256   HV_P2P_SRVR_icon.png --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+          sips -z 256 256   HV_P2P_SRVR_icon.png --out "$ICONSET/icon_256x256.png" >/dev/null
+          sips -z 512 512   HV_P2P_SRVR_icon.png --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+          sips -z 512 512   HV_P2P_SRVR_icon.png --out "$ICONSET/icon_512x512.png" >/dev/null
+          cp HV_P2P_SRVR_icon.png "$ICONSET/icon_512x512@2x.png"
+          iconutil -c icns "$ICONSET" -o "$STAGE/HV_P2P_SRVR.icns"
+          test -s "$STAGE/HV_P2P_SRVR.icns"
+          cp "$STAGE/HV_P2P_SRVR.icns" "$APP_PATH/Contents/Resources/HV_P2P_SRVR.icns"
+
+          PLIST="$APP_PATH/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Delete :CFBundleDisplayName' "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string HV P2P SRVR' "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleName HV P2P SRVR' "$PLIST" || /usr/libexec/PlistBuddy -c 'Add :CFBundleName string HV P2P SRVR' "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Delete :CFBundleIconFile' "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c 'Add :CFBundleIconFile string HV_P2P_SRVR.icns' "$PLIST"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$PLIST")" = 'HV P2P SRVR'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$PLIST")" = 'HV P2P SRVR'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST")" = 'HV_P2P_SRVR.icns'
+
           # The exact v03/v04 failure is now checked again on the completed app.
           LEAKS="$(find "$APP_PATH/Contents" \
             \( -type d \( -name '.github' -o -name '.git' -o -name '__pycache__' -o -name 'tools' \) \
@@ -209,10 +241,9 @@ jobs:
           # on an existing ad-hoc signature is handled immediately below.
           xattr -cr "$APP_PATH" || true
 
-          # No Info.plist/icon/resource edits are made after deployment. Preserve
-          # Qt/Nuitka's own bundle signature when it is already valid. Only fall
-          # back to a fresh ad-hoc development signature when verification says
-          # one is actually required. This is NOT Developer ID signing/notarising.
+          # Bundle identity/icon edits above intentionally invalidate any prior
+          # deployment signature, so verify first and apply a fresh ad-hoc
+          # development signature when required. This is NOT Developer ID signing/notarising.
           if codesign --verify --deep --strict --verbose=2 "$APP_PATH"; then
             echo 'Qt/Nuitka bundle signature is already valid; leaving it untouched.'
           else
@@ -302,8 +333,8 @@ jobs:
       - name: Upload GitHub Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HV-P2P-SRVR-v26.08.17.11-macOS-Intel
-          path: HV P2P SRVR v26.08.17.11 macOS Intel.zip
+          name: HV-P2P-SRVR-v26.08.17.12-macOS-Intel
+          path: HV P2P SRVR v26.08.17.12 macOS Intel.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
