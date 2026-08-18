@@ -26,10 +26,12 @@ from backend import (
     HVP2PBackend,
     CONTROL_PACKET_CODE,
     FLAG_ADS1115_FAULT,
+    FLAG_AUX1,
+    HMI_STATUS_TIMEOUT_S,
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.15", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.16", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -40,6 +42,40 @@ try:
     a7 = bytes([0xA7, 0x02, 0x10]) + struct.pack("!f", -0.25) + b"\x00\x00\x00"
     flags, joy = b._parse_control_packet(a7)
     assert flags == 0x0210 and abs(joy + 0.25) < 1e-6
+
+    # Secondary CTRL/W1P touchscreen diagnostic packets are part of the proven
+    # controller interface and must not be confused with the binary control stream.
+    now = time.time()
+    b._ctrl_rx_times.extend([now - 0.05, now])
+    b._handle_ctrl_hmi_status("HMI_STATUS|ctrl_ts=1|version=vTEST|age_ms=12|ads=1")
+    assert b.ctrlTsConnected and b.ads1115Connected
+    assert b._ctrl_ts_version == "vTEST" and b._ctrl_ts_age_ms == 12
+    b._handle_ctrl_hmi_status("HMI_STATUS|ctrl_ts=0|version=vTEST|age_ms=20|ads=0")
+    assert not b.ctrlTsConnected and not b.ads1115Connected
+    # Old CTRL firmware without a fresh explicit ads= field remains compatible:
+    # live joystick packets + no ADS fault bit infer a healthy ADS link.
+    b._ads1115_status_last_seen = time.time() - HMI_STATUS_TIMEOUT_S - 1.0
+    b._ctrl_flags = 0
+    assert b.ads1115Connected
+    b.w1p.last_seen = now
+    b._parse_w1p("W1P_HMI_STATUS|w1p_ts=1|version=wTEST|age_ms=15")
+    assert b.w1pTsConnected and b._w1p_ts_version == "wTEST" and b._w1p_ts_age_ms == 15
+
+    # CTRL-TS display packet must retain the required DSP1 contract understood by
+    # the proven CTRL relay/CTRL-TS firmware. It is display-only, not motion data.
+    b.state.near_limit.position_m = 0.0
+    b.state.far_limit.position_m = 100.0
+    b.state.ref_point.position_m = 50.0
+    b.state.pos_m = 25.0
+    b.winch_rs_status = "Connected"
+    b.state.estop_active = False
+    b.current_speed_mps = -1.25
+    display = b._build_controller_display_packet()
+    assert display.startswith("DSP1|") and display.endswith("\n")
+    assert "|speed_mps=-1.25|" in display and "|speed_kmh=-4.50|" in display
+    for required in ("|ctrl=", "|srvr=1", "|w1p=", "|flags=", "|speed_mps=",
+                     "|aux1=", "|aux4=", "|preset_names=", "|preset_pos="):
+        assert required in display, required
 
     # Simulate healthy live links for motion tests.
     now = time.time()
@@ -82,6 +118,38 @@ try:
     assert abs(b.preset_positions[0] - 25.0) < 1e-9
     b.recallPreset(0)
     assert b.goto_target_m is not None and abs(b.goto_target_m - 35.0) < 1e-9
+
+    # Physical CTRL AUX assignments execute on a rising edge only. Holding AUX1
+    # must not repeatedly overwrite a saved preset every 50 ms.
+    b.goto_target_m = None
+    b.ctrl_aux_assignments[0] = "Preset 1 Save"
+    b.state.pos_m = 40.0
+    b._ctrl_axis = 0.0
+    b._ctrl_flags = FLAG_AUX1
+    b._ctrl_aux_last = [False, False, False, False]
+    b._motion_tick()
+    assert abs(float(b.preset_positions[0]) - 30.0) < 1e-9
+    b.state.pos_m = 45.0
+    b._motion_tick()
+    assert abs(float(b.preset_positions[0]) - 30.0) < 1e-9, "held AUX retriggered"
+    b._ctrl_flags = 0; b._motion_tick()
+    b._ctrl_flags = FLAG_AUX1; b._motion_tick()
+    assert abs(float(b.preset_positions[0]) - 35.0) < 1e-9
+    b._ctrl_flags = 0; b._motion_tick()
+
+    # W1P-TS AUX messages use the same assignment executor. The proven current
+    # transport emits AUX1..AUX4; the fifth stored Setup row is future-compatible.
+    b.w1p_aux_assignments[0] = "Drive Mode"
+    before_mode = b.active_drive_mode
+    b._parse_w1p("W1PTS_AUX 1")
+    assert b.active_drive_mode == 1 - before_mode
+
+    # Preset Slip re-references W1P/SRVR at the assigned known preset position.
+    b.w1p_aux_assignments[1] = "Preset 1 Slip"
+    b._not_calibrated = True
+    b.state.pos_m = 70.0
+    b._parse_w1p("W1PTS_AUX 2")
+    assert abs(float(b.state.pos_m) - 45.0) < 1e-9 and not b._not_calibrated
 
     # Operator-editable Run fields persist through the backend interface.
     b.setPresetName(0, "Wide Establish")
@@ -613,6 +681,76 @@ try:
     b._winch_position_accept_jump_until = 0.0
     b._winch_last_pos_accept_t = time.time()
     assert not b._sanity_accept_winch_position(80.0, {}), "implausible position jump accepted"
+
+    # End-to-end protocol emission simulation. This does not need physical
+    # hardware: it records exactly what the backend would put on the W1P/CTRL
+    # UDP transports and guards the proven command vocabulary/port contract.
+    class FakeW1P:
+        def __init__(self):
+            self.sent = []
+            self.last_seen = time.time()
+            self.host = b.w1p_ip
+            self.port = b.w1p_port
+        @property
+        def connected(self): return True
+        def send(self, text): self.sent.append(str(text))
+        def reconfigure(self, host, port): self.host, self.port = host, port
+        def close(self): pass
+
+    class FakeDisplaySocket:
+        def __init__(self): self.sent = []
+        def sendto(self, payload, target): self.sent.append((bytes(payload), target))
+        def close(self): pass
+
+    original_w1p = b.w1p
+    original_display_sock = b._ctrl_display_sock
+    original_smoke = b.smoke_test
+    fake_w1p = FakeW1P()
+    fake_display = FakeDisplaySocket()
+    try:
+        b.w1p = fake_w1p
+        b._ctrl_display_sock = fake_display
+        b.smoke_test = False
+        b.reverse_motor = False
+        b.winch_units_per_m = 21220.7
+        b.max_accel_mps2 = 5.0; b.max_decel_mps2 = 5.0
+        b.max_crossover_mps2 = 10.0; b.max_stop_decel_mps2 = 7.5
+        b.acceleration_mode = "Speed"
+        b.state.near_limit.position_m = 0.0; b.state.far_limit.position_m = 100.0
+        b._not_calibrated = False; b.battery_change_mode = False; b.calibration_open = False
+        b._last_service_mode_sent = None
+        b._sync_w1p_settings()
+        expected = {
+            "SET_UNITS_PER_M 21220.7", "SET_MOTOR_REVERSE 0",
+            "SET_ACCEL 5.000", "SET_DECEL 5.000", "SET_CROSSOVER 10.000",
+            "SET_STOP_DECEL 7.500", "SET_ACCEL_MODE DYNAMIC",
+            "SET_SPAN 100.000", "SET_LIMIT_NEAR 0.000", "SET_LIMIT_FAR 100.000",
+            "SERVICE_MODE 0",
+        }
+        assert expected.issubset(set(fake_w1p.sent)), set(fake_w1p.sent)
+        fake_w1p.sent.clear(); b._send_velocity(12.345, force=True); b._send_velocity(0.0, force=True)
+        assert fake_w1p.sent == ["VEL 12.345", "VEL 0"], fake_w1p.sent
+        fake_w1p.sent.clear(); b._sync_position(42.0)
+        assert "VEL 0" in fake_w1p.sent and "SYNC_POS 42.000" in fake_w1p.sent
+
+        # SRVR software E-stop must issue immediate W1P STOP and servo-enable
+        # state changes, preserving the proven safety handshake.
+        b._srvr_estop = False; fake_w1p.sent.clear(); b.toggleSrvrEStop()
+        assert "STOP" in fake_w1p.sent and "SW_SRVON 0" in fake_w1p.sent
+        fake_w1p.sent.clear(); b.toggleSrvrEStop()
+        assert "STOP" in fake_w1p.sent and "SW_SRVON 1" in fake_w1p.sent
+
+        # The display packet is sent to the configured CTRL IP on UDP/5000 and
+        # remains a separate DSP1 telemetry path.
+        b._last_ctrl_display_packet = b""
+        b._send_controller_display_packet(force=True)
+        assert fake_display.sent
+        payload, target = fake_display.sent[-1]
+        assert target == (b.ctrl_ip, 5000) and payload.startswith(b"DSP1|") and payload.endswith(b"\n")
+    finally:
+        b.smoke_test = original_smoke
+        b.w1p = original_w1p
+        b._ctrl_display_sock = original_display_sock
 
     print("BACKEND REGRESSION PASS")
 finally:

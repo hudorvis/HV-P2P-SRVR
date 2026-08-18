@@ -36,6 +36,10 @@ CTRL_RX_MIN_PKTS = 2
 JOY_DEADBAND_PCT = 5.0
 WINCH_STATUS_TIMEOUT_S = 0.75
 WINCH_PROBE_INTERVAL_S = 0.05
+HMI_STATUS_TIMEOUT_S = 3.5
+HMI_DISPLAY_MIN_CHANGE_INTERVAL_S = 0.04
+HMI_DISPLAY_KEEPALIVE_S = 3.0
+CTRL_AUX_BITS = (FLAG_AUX1, FLAG_AUX2, FLAG_AUX3, FLAG_AUX4)
 
 
 def _s24_to_int(b: bytes) -> int:
@@ -136,7 +140,7 @@ class HVP2PBackend(QObject):
     calibrationChanged = Signal()
     joystickCalibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.15", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.16", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
@@ -205,6 +209,30 @@ class HVP2PBackend(QObject):
         self._ctrl_flags = 0
         self._ctrl_axis = 0.0
         self._mode_last = self._batt_last = False
+        # Physical CTRL firmware exposes four AUX flag bits. Keep edge state so
+        # a held button executes its assigned action once, matching the legacy
+        # controller-event path rather than retriggering at the 20 Hz motion tick.
+        self._ctrl_aux_last = [False, False, False, False]
+        # Secondary controller/touchscreen health reporting carried forward from
+        # the proven v26.06.26.25 backend. These do not replace the primary
+        # joystick/W1P safety path; they drive the Setup link indicators.
+        self._ctrl_ts_last_seen = 0.0
+        self._ctrl_ts_connected_reported = False
+        self._ctrl_ts_version = ""
+        self._ctrl_ts_age_ms = 999999
+        self._ads1115_status_last_seen = 0.0
+        self._ads1115_connected_reported = False
+        self._w1p_ts_last_seen = 0.0
+        self._w1p_ts_connected_reported = False
+        self._w1p_ts_version = ""
+        self._w1p_ts_age_ms = 999999
+        # The CTRL firmware accepts DSP1 UDP packets from SRVR and forwards them
+        # to CTRL-TS as HMI1. Use an independent unbound socket so the listener
+        # remains the sole owner of UDP/5000 locally.
+        self._ctrl_display_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._last_ctrl_display_packet = b""
+        self._last_ctrl_display_change_tx = 0.0
+        self._last_ctrl_display_keepalive_tx = 0.0
         self._stop_evt = threading.Event()
         self._w1p_rx: queue.Queue[str] = queue.Queue(maxsize=1000)
         self.w1p = W1PClient(self.w1p_ip, self.w1p_port, self._w1p_rx, self._log)
@@ -389,6 +417,13 @@ class HVP2PBackend(QObject):
                 try: sock.sendto(bytes([HEARTBEAT_ACK]), addr)
                 except Exception: pass
                 continue
+            try:
+                line_text = data.decode("ascii", "ignore").strip()
+            except Exception:
+                line_text = ""
+            if line_text.startswith("HMI_STATUS|"):
+                self._handle_ctrl_hmi_status(line_text)
+                continue
             msg = self._parse_control_packet(data)
             if not msg: continue
             now = time.time()
@@ -410,6 +445,36 @@ class HVP2PBackend(QObject):
             else: return None
             return flags, max(-1.0, min(1.0, float(joy)))
         except Exception: return None
+
+    @staticmethod
+    def _parse_pipe_fields(line: str) -> dict:
+        fields = {}
+        try:
+            for item in str(line or "").strip().split("|")[1:]:
+                if "=" in item:
+                    key, value = item.split("=", 1)
+                    fields[key.strip()] = value.strip()
+        except Exception:
+            pass
+        return fields
+
+    def _handle_ctrl_hmi_status(self, line: str):
+        """Parse the proven CTRL HMI_STATUS relay packet.
+
+        CTRL control packets remain the authoritative controller/safety stream.
+        HMI_STATUS only reports CTRL-TS and ADS1115 health for Setup diagnostics.
+        """
+        fields = self._parse_pipe_fields(line)
+        now = time.time()
+        self._ctrl_ts_last_seen = now
+        self._ctrl_ts_connected_reported = str(fields.get("ctrl_ts", "0")).strip() == "1"
+        self._ctrl_ts_version = str(fields.get("version", ""))
+        try:
+            self._ctrl_ts_age_ms = int(float(fields.get("age_ms", 999999)))
+        except Exception:
+            self._ctrl_ts_age_ms = 999999
+        self._ads1115_status_last_seen = now
+        self._ads1115_connected_reported = str(fields.get("ads", fields.get("ads1115", "0"))).strip() == "1"
 
     def _calibrated_joystick(self, raw: float) -> float:
         """Piecewise-normalise a raw joystick sample around the captured centre.
@@ -442,6 +507,29 @@ class HVP2PBackend(QObject):
 
     # --- W1P parsing / motion ---
     def _parse_w1p(self, line):
+        line = str(line or "").strip()
+        if line.startswith("W1PTS_AUX"):
+            try:
+                idx = int(line.replace("W1PTS_AUX", "").strip()) - 1
+                # The proven W1P-TS transport currently emits AUX1..AUX4.
+                # Accept a fifth index if a future firmware sends it because the
+                # locked Setup UI already stores five assignment rows.
+                if 0 <= idx < len(self.w1p_aux_assignments):
+                    self._handle_aux_action(idx, source="w1p")
+            except Exception as exc:
+                self._log(f"[W1P AUX] invalid event {line!r}: {exc}")
+            return
+        if line.startswith("W1P_HMI_STATUS|"):
+            fields = self._parse_pipe_fields(line)
+            now = time.time()
+            self._w1p_ts_last_seen = now
+            self._w1p_ts_connected_reported = str(fields.get("w1p_ts", fields.get("w1pts", "0"))).strip() == "1"
+            self._w1p_ts_version = str(fields.get("version", ""))
+            try:
+                self._w1p_ts_age_ms = int(float(fields.get("age_ms", 999999)))
+            except Exception:
+                self._w1p_ts_age_ms = 999999
+            return
         if line.startswith("ERR"):
             self._log(f"[W1P] {line}"); return
         if not line.startswith("STATUS"): return
@@ -672,6 +760,166 @@ class HVP2PBackend(QObject):
             return
         self.w1p.send("VEL 0" if abs(vel) < .001 else f"VEL {vel:.3f}")
 
+    def _handle_aux_action(self, index: int, source: str = "ctrl"):
+        """Execute one configured physical/touchscreen AUX assignment.
+
+        The action vocabulary matches the locked Setup page. CTRL transport has
+        four proven hardware bits; W1P-TS events are parsed separately.
+        """
+        src = "w1p" if str(source).lower().startswith("w1p") else "ctrl"
+        assignments = self.w1p_aux_assignments if src == "w1p" else self.ctrl_aux_assignments
+        if not (0 <= int(index) < len(assignments)):
+            return
+        action = str(assignments[int(index)] or "None").strip()
+        if not action or action == "None":
+            return
+        label = f"{'W1P-TS' if src == 'w1p' else 'CTRL'} AUX{int(index)+1}"
+        try:
+            if action == "Drive Mode":
+                self.setDriveMode(1 - int(self.active_drive_mode))
+            elif action in ("Acceleration Mode", "Accel Mode"):
+                self.setAccelerationMode("Power" if self.acceleration_mode == "Speed" else "Speed")
+            elif action in ("Battery Change Mode", "Battery Change"):
+                self.setBatteryChange(not bool(self.battery_change_mode))
+            elif action == "Limit Calibration":
+                self.openLimitCalibration()
+            elif action == "Winch Calibration":
+                self.openWinchCalibration()
+            elif action.startswith("Preset "):
+                parts = action.split()
+                if len(parts) >= 3:
+                    preset_i = int(parts[1]) - 1
+                    verb = parts[2].lower()
+                    if verb == "save":
+                        self.savePreset(preset_i)
+                    elif verb == "recall":
+                        self.recallPreset(preset_i)
+                    elif verb == "slip":
+                        target = self._preset_absolute_position(preset_i)
+                        if target is not None:
+                            self.goto_target_m = None
+                            self._sync_position(float(target))
+                            self._not_calibrated = False
+                            self._sync_service_mode_to_winch(force=True)
+                            self._save_config(); self._notify_config()
+            else:
+                limit_action = None
+                for display, which in (("Near Limit", "Near"), ("Far Limit", "Far"), ("Ref Point", "Reference")):
+                    if action.startswith(display + " "):
+                        limit_action = (which, action[len(display)+1:].strip().lower())
+                        break
+                if limit_action:
+                    which, verb = limit_action
+                    if verb == "save": self.saveLimit(which)
+                    elif verb == "recall": self.recallLimit(which)
+                    elif verb == "slip": self.slipLimit(which)
+            self._log(f"[AUX] {label}: {action}")
+        except Exception as exc:
+            self._log(f"[AUX] {label} failed ({action}): {exc}")
+
+    @staticmethod
+    def _display_field(value, limit: int = 24) -> str:
+        text = str(value if value is not None else "").replace("|", "/").replace(",", "/").replace("\r", " ").replace("\n", " ").strip()
+        return text[:max(1, int(limit))]
+
+    def _build_controller_display_packet(self) -> str:
+        """Build the proven DSP1 SRVR->CTRL display/status packet.
+
+        CTRL firmware rewrites DSP1 to HMI1 and forwards it to CTRL-TS. This is
+        deliberately separate from the control/safety path.
+        """
+        near_abs = float(self.state.near_limit.position_m or 0.0)
+        far_abs = float(self.state.far_limit.position_m if self.state.far_limit.position_m is not None else near_abs + self.state.total_length_m)
+        if far_abs < near_abs:
+            near_abs, far_abs = far_abs, near_abs
+        pos_abs = float(self.state.pos_m if self.state.pos_m is not None else near_abs)
+        pos_rel = pos_abs - near_abs
+        far_rel = far_abs - near_abs
+        ref_set = self.state.ref_point.position_m is not None
+        ref_rel = float(self.state.ref_point.position_m or near_abs) - near_abs
+        to_near = max(0.0, pos_abs - near_abs)
+        to_far = max(0.0, far_abs - pos_abs)
+        ramp_near = self._ramp_distance(self.state.near_limit, max(0.001, far_rel))
+        ramp_far = self._ramp_distance(self.state.far_limit, max(0.001, far_rel))
+        ctrl_ok = self._ctrl_connected()
+        w1p_ok = bool(self.w1p.connected)
+        if not w1p_ok:
+            w1p_state = "error"
+        elif self.winch_rs_status != "Connected" or self._w1p_estop:
+            w1p_state = "fault"
+        else:
+            w1p_state = "ok"
+
+        if self.state.estop_active:
+            status = self.bannerText
+            level = "red"
+            source = status.split("|", 1)[1].strip() if "|" in status else ""
+            estop = 1
+        elif self.battery_change_mode:
+            status, level, source, estop = "Battery Change", "yellow", "", 0
+        elif self.calibration_open:
+            status = "Winch Calibration" if self.calibration_type == "Winch" else "Limit Calibration"
+            level, source, estop = "yellow", "", 0
+        elif self._not_calibrated:
+            status, level, source, estop = "Un-Calibrated", "yellow", "", 0
+        else:
+            status, level, source, estop = "Active", "green", "", 0
+
+        mode = self.drive_modes[self.active_drive_mode]
+        max_mps = float(mode.get("max_speed_mps", self.max_speed_mps))
+        mode_name = self._display_field(mode.get("name", f"Mode {self.active_drive_mode+1}"))
+        labels = [self._display_field(self.ctrl_aux_assignments[i] if i < len(self.ctrl_aux_assignments) else "") for i in range(4)]
+        preset_names, preset_pos, preset_abs, preset_vis = [], [], [], []
+        for i in range(10):
+            preset_names.append(self._display_field(self.preset_names[i], 8))
+            rel = self.preset_positions[i]
+            preset_pos.append("" if rel is None else f"{float(rel):.2f}")
+            absolute = self._preset_absolute_position(i)
+            preset_abs.append("" if absolute is None else f"{float(absolute):.2f}")
+            preset_vis.append("1" if (rel is not None and bool(self.preset_visible[i])) else "0")
+
+        speed = float(self.current_speed_mps or 0.0)
+        fields = [
+            "DSP1", f"pos={pos_rel:.2f}", f"to_near={to_near:.2f}", f"to_far={to_far:.2f}",
+            f"speed_mps={speed:.2f}", f"speed_kmh={speed*3.6:.2f}",
+            "near=0.00", f"ref={ref_rel:.2f}", f"far={far_rel:.2f}",
+            f"ramp_near={ramp_near:.2f}", f"ramp_far={ramp_far:.2f}",
+            f"ref_vis={1 if ref_set else 0}", f"estop={estop}",
+            f"estop_src={self._display_field(source)}", f"status={self._display_field(status)}",
+            f"status_level={level}", f"ctrl={1 if ctrl_ok else 0}", "srvr=1",
+            f"w1p={1 if w1p_ok else 0}", f"w1p_state={w1p_state}",
+            f"service={1 if self._service_override_active() else 0}", f"flags={int(self._ctrl_flags)}",
+            f"aux1={labels[0]}", f"aux2={labels[1]}", f"aux3={labels[2]}", f"aux4={labels[3]}",
+            f"max_mps={max_mps:.2f}", f"max_kmh={max_mps*3.6:.2f}", f"mode={mode_name}",
+            f"preset_names={','.join(preset_names)}", f"preset_pos={','.join(preset_pos)}",
+            f"preset_abs={','.join(preset_abs)}", f"preset_vis={','.join(preset_vis)}",
+        ]
+        return "|".join(fields) + "\n"
+
+    def _send_controller_display_packet(self, force: bool = False):
+        if self.smoke_test:
+            return
+        target = str(self.ctrl_ip or "").strip()
+        if not target:
+            return
+        now = time.time()
+        packet = self._build_controller_display_packet().encode("ascii", "ignore")
+        changed = packet != self._last_ctrl_display_packet
+        if not force:
+            if changed and (now - self._last_ctrl_display_change_tx) < HMI_DISPLAY_MIN_CHANGE_INTERVAL_S:
+                return
+            if (not changed) and (now - self._last_ctrl_display_keepalive_tx) < HMI_DISPLAY_KEEPALIVE_S:
+                return
+        try:
+            self._ctrl_display_sock.sendto(packet, (target, SERVER_BIND_PORT))
+            self._last_ctrl_display_packet = packet
+            self._last_ctrl_display_keepalive_tx = now
+            if changed:
+                self._last_ctrl_display_change_tx = now
+        except Exception:
+            # Display/status telemetry must never disturb the motion/safety loop.
+            pass
+
     def _motion_tick(self):
         connected = self._ctrl_connected()
         flags = self._ctrl_flags
@@ -700,6 +948,11 @@ class HVP2PBackend(QObject):
         if batt_pressed and not self._batt_last:
             self.setBatteryChange(not self.battery_change_mode)
         self._batt_last = batt_pressed
+        for aux_i, aux_bit in enumerate(CTRL_AUX_BITS):
+            pressed = bool(flags & aux_bit)
+            if pressed and not self._ctrl_aux_last[aux_i]:
+                self._handle_aux_action(aux_i, source="ctrl")
+            self._ctrl_aux_last[aux_i] = pressed
 
         self._sync_service_mode_to_winch()
         self._update_battery_change_auto_cancel()
@@ -1093,7 +1346,7 @@ class HVP2PBackend(QObject):
             for _ in range(100):
                 try: self._parse_w1p(self._w1p_rx.get_nowait())
                 except queue.Empty: break
-            self._motion_tick(); self._send_freed(); self.stateChanged.emit()
+            self._motion_tick(); self._send_freed(); self._send_controller_display_packet(); self.stateChanged.emit()
         except Exception as exc: self._log(f"[SRVR] tick: {exc}")
 
     # --- config ---
@@ -1665,11 +1918,23 @@ class HVP2PBackend(QObject):
     @Property(float, notify=stateChanged)
     def freeDFps(self): return float(self.freed_in_fps)
     @Property(bool, notify=stateChanged)
-    def ctrlTsConnected(self): return self._ctrl_connected()
+    def ctrlTsConnected(self):
+        return bool(self._ctrl_connected() and self._ctrl_ts_connected_reported and
+                    self._ctrl_ts_last_seen > 0 and time.time() - self._ctrl_ts_last_seen <= HMI_STATUS_TIMEOUT_S)
     @Property(bool, notify=stateChanged)
-    def ads1115Connected(self): return bool(self._ctrl_connected() and not (self._ctrl_flags & FLAG_ADS1115_FAULT))
+    def ads1115Connected(self):
+        if not self._ctrl_connected() or bool(self._ctrl_flags & FLAG_ADS1115_FAULT):
+            return False
+        # Prefer the explicit HMI_STATUS ads= field when available. Older CTRL
+        # firmware did not always report it, so a healthy live joystick stream
+        # with no ADS fault bit remains a compatible positive fallback.
+        if self._ads1115_status_last_seen > 0 and time.time() - self._ads1115_status_last_seen <= HMI_STATUS_TIMEOUT_S:
+            return bool(self._ads1115_connected_reported)
+        return True
     @Property(bool, notify=stateChanged)
-    def w1pTsConnected(self): return bool(self.w1p.connected)
+    def w1pTsConnected(self):
+        return bool(self.w1p.connected and self._w1p_ts_connected_reported and
+                    self._w1p_ts_last_seen > 0 and time.time() - self._w1p_ts_last_seen <= HMI_STATUS_TIMEOUT_S)
     @Property(bool, notify=stateChanged)
     def rs485Connected(self): return bool(self.w1p.connected and self.winch_rs_status == "Connected")
     @Property(float, notify=stateChanged)
@@ -2788,4 +3053,5 @@ class HVP2PBackend(QObject):
         try:
             if self._freed_in_sock: self._freed_in_sock.close()
             self._freed_sock.close()
+            self._ctrl_display_sock.close()
         except Exception: pass

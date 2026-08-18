@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.15"
+VERSION = "26.08.17.16"
 ERRORS: list[str] = []
 
 
@@ -445,6 +445,29 @@ require('width:parent.width; height:root.f(250)' in qml_setup and
 for token in ('def setJoystickDeadband', 'def setPositionSource', 'def setDriveModeValue', 'def setAuxAssignment'):
     require(token in backend, f"legacy backend compatibility slot missing: {token}")
 
+# v16 final hardware-interface audit. The Qt redesign must retain the secondary
+# controller interfaces that existed in the proven pre-Qt backend as well as the
+# core joystick/W1P motion loop.
+for token in (
+    'if line_text.startswith("HMI_STATUS|")', 'def _handle_ctrl_hmi_status',
+    'if line.startswith("W1PTS_AUX")', 'if line.startswith("W1P_HMI_STATUS|")',
+    'def _handle_aux_action', 'CTRL_AUX_BITS = (FLAG_AUX1, FLAG_AUX2, FLAG_AUX3, FLAG_AUX4)',
+    'def _build_controller_display_packet', '"DSP1"', 'def _send_controller_display_packet',
+    'self._send_controller_display_packet()',
+):
+    require(token in backend, f"restored CTRL/W1P interface path missing: {token}")
+require('self._ctrl_ts_connected_reported' in backend and 'self._w1p_ts_connected_reported' in backend and
+        'HMI_STATUS_TIMEOUT_S = 3.5' in backend,
+        "touchscreen link-state freshness handling is missing")
+require('return bool(self._ctrl_connected() and self._ctrl_ts_connected_reported' in backend and
+        'return bool(self.w1p.connected and self._w1p_ts_connected_reported' in backend,
+        "Setup CTRL-TS/W1P-TS indicators are still aliases of the parent node link")
+require('profileValue(Number(gp.x), "y")' in span_qml and
+        'var gv=root.sideView ? Number(gp.y)' not in span_qml,
+        "Free-D Side View geometry markers are not pinned to the calculated cable profile")
+require('var gv=root.sideView ? profileValue(Number(gp.x), "y") : geometryZ(g)' in span_qml,
+        "Top View P1/P5 Z behaviour changed while fixing Side View markers")
+
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.
 for token in (
@@ -514,5 +537,5 @@ print("  QRC/project manifest: OK")
 print("  Four-page heading/style contract + clipping guards: OK")
 print("  Joystick calibration wizard + neutral-return safety interlock: OK")
 print("  Run 20/25/25/30 geometry: OK")
-print("  Proven W1P/CTRL critical command contract: OK")
+print("  Proven W1P/CTRL critical command + secondary interface contract: OK")
 print("  Isolated deployment staging + smoke checks: OK")

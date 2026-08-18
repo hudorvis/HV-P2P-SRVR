@@ -255,13 +255,15 @@ Item {
             }
             c.stroke()
 
-            // Free-D page: show the five operator-entered geometry points. The
-            // cable itself remains the calculated smooth/sagged profile above.
+            // Free-D page: keep P1..P5 visually attached to the calculated cable.
+            // Their entered X positions identify each marker; Side View Y is
+            // sampled from this same drawn profile, while the editable raw Y
+            // geometry values remain unchanged in the Free-D table/data model.
             if(root.showGeometryPoints && root.geometryPoints) {
                 for(var g=0;g<root.geometryPoints.length;g++) {
                     var gp=root.geometryPoints[g]
                     var gx=xFor(Number(gp.x),left,right)
-                    var gv=root.sideView ? Number(gp.y) : geometryZ(g)
+                    var gv=root.sideView ? profileValue(Number(gp.x), "y") : geometryZ(g)
                     var gy=yFor(gv,vr,graphTop+20,graphBottom-18)
                     c.fillStyle="#f1f3f2"; c.strokeStyle="#f1f3f2"
                     c.beginPath(); c.arc(gx,gy,4,0,Math.PI*2); c.fill()
