@@ -34,6 +34,8 @@ ApplicationWindow {
         editCommitSink.forceActiveFocus()
         if (i === 1 && page !== 1)
             backend.beginSetupEdit()
+        if (i === 2 && page !== 2)
+            backend.beginFreeDEdit()
         page = i
     }
     function changeShortcutTab(i) {
@@ -261,7 +263,9 @@ ApplicationWindow {
 
             // -------------------- FREE-D --------------------
             Item {
+                id: freeDPage
                 anchors.fill:parent; visible:window.page===2
+                property var fdDraft: backend.freeDDraft
                 Column {
                     anchors.fill:parent; spacing:f(8)
                     Item {
@@ -279,18 +283,18 @@ ApplicationWindow {
                                     Row {
                                         width:parent.width; height:f(31); spacing:f(5)
                                         Text{width:f(44);anchors.verticalCenter:parent.verticalCenter;text:"Input:";color:fg;font.pixelSize:f(12)}
-                                        HVButton{width:f(46);height:parent.height;text:backend.freeDInputEnabled?"ON":"OFF";selected:backend.freeDInputEnabled;onClicked:backend.setFreeDEnabled("Input",!backend.freeDInputEnabled)}
+                                        HVButton{width:f(46);height:parent.height;text:freeDPage.fdDraft.input_enabled?"ON":"OFF";selected:freeDPage.fdDraft.input_enabled;onClicked:backend.setFreeDEnabled("Input",!freeDPage.fdDraft.input_enabled)}
                                         Text{width:f(66);anchors.verticalCenter:parent.verticalCenter;text:"IP Address:";color:fg;font.pixelSize:f(11)}
-                                        HVField{width:parent.width-f(44+46+66+31+54+25);height:parent.height;bindModel:true;modelText:backend.freeDInputIp;font.pixelSize:f(12);onCommit:function(v){backend.setFreeDNetwork("Input","IP",v)}}
+                                        HVField{width:parent.width-f(44+46+66+31+54+25);height:parent.height;bindModel:true;modelText:freeDPage.fdDraft.input_bind_ip;font.pixelSize:f(12);onCommit:function(v){backend.setFreeDNetwork("Input","IP",v)}}
                                         Text{width:f(31);anchors.verticalCenter:parent.verticalCenter;text:"Port:";color:fg;font.pixelSize:f(11)}
-                                        HVField{width:f(54);height:parent.height;bindModel:true;modelText:String(backend.freeDInputPort);font.pixelSize:f(12);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setFreeDNetwork("Input","Port",v)}}
+                                        HVField{width:f(54);height:parent.height;bindModel:true;modelText:String(freeDPage.fdDraft.input_port);font.pixelSize:f(12);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setFreeDNetwork("Input","Port",v)}}
                                     }
                                     Row { width:parent.width;height:f(22);spacing:0;HVReadout{width:parent.width*.22;height:parent.height;text:"Parameter";textColor:muted;horizontalAlignment:Text.AlignLeft}HVReadout{width:parent.width*.18;height:parent.height;text:"Raw";textColor:muted}HVReadout{width:parent.width*.25;height:parent.height;text:"Decoded";textColor:muted}HVReadout{width:parent.width*.21;height:parent.height;text:"Offset";textColor:muted}HVReadout{width:parent.width*.14;height:parent.height;text:"Invert";textColor:muted} }
                                     Repeater {
                                         model:["Cam ID","Pan","Tilt","Roll","Zoom","Focus","FPS"]
                                         delegate:Row {
                                             width:parent.width; height:f(29); spacing:0
-                                            property var fd:backend.freeDInput
+                                            property var fd:backend.freeDInputPreview
                                             property bool hasOffset:["Pan","Tilt","Roll"].indexOf(modelData)>=0
                                             property bool hasInvert:["Pan","Tilt","Roll","Zoom","Focus"].indexOf(modelData)>=0
                                             property string rawText:modelData==="Cam ID"?String(fd.cam):modelData==="Pan"?String(fd.panRaw):modelData==="Tilt"?String(fd.tiltRaw):modelData==="Roll"?String(fd.rollRaw):modelData==="Zoom"?String(fd.zoomRaw):modelData==="Focus"?String(fd.focusRaw):Number(fd.fps).toFixed(3)
@@ -298,8 +302,8 @@ ApplicationWindow {
                                             HVReadout{width:parent.width*.22;height:parent.height;text:modelData;horizontalAlignment:Text.AlignLeft}
                                             HVReadout{width:parent.width*.18;height:parent.height;text:parent.rawText}
                                             HVReadout{width:parent.width*.25;height:parent.height;text:parent.decodedText}
-                                            HVField{width:parent.width*.21;height:parent.height;bindModel:true;readOnly:!parent.hasOffset;modelText:parent.hasOffset?Number(backend.freeDInputOffsets[modelData]).toFixed(3):"—";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.hasOffset){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Input",modelData,n)}}}
-                                            HVCheck{width:parent.width*.14;height:parent.height;interactive:parent.hasInvert;checked:parent.hasInvert?Boolean(backend.freeDInputInverts[modelData]):false;onToggled:function(v){if(parent.hasInvert)backend.setFreeDInvert("Input",modelData,v)}}
+                                            HVField{width:parent.width*.21;height:parent.height;bindModel:true;readOnly:!parent.hasOffset;modelText:parent.hasOffset?Number(freeDPage.fdDraft.input_offsets[modelData]).toFixed(3):"—";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.hasOffset){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Input",modelData,n)}}}
+                                            HVCheck{width:parent.width*.14;height:parent.height;interactive:parent.hasInvert;checked:parent.hasInvert?Boolean(freeDPage.fdDraft.input_inverts[modelData]):false;onToggled:function(v){if(parent.hasInvert)backend.setFreeDInvert("Input",modelData,v)}}
                                         }
                                     }
                                     Row { width:parent.width;height:f(25);Text{text:"Input Rate:  "+Number(backend.freeDFps).toFixed(3)+" fps";color:fg;font.pixelSize:f(11)}Item{width:f(24);height:1}Text{text:"Status:  "+(backend.freeDActive?"Locked":"Off");color:backend.freeDActive?green:muted;font.pixelSize:f(11)} }
@@ -315,28 +319,28 @@ ApplicationWindow {
                                     Row {
                                         width:parent.width; height:f(31); spacing:f(5)
                                         Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Output:";color:fg;font.pixelSize:f(12)}
-                                        HVButton{width:f(46);height:parent.height;text:backend.freeDOutputEnabled?"ON":"OFF";selected:backend.freeDOutputEnabled;onClicked:backend.setFreeDEnabled("Output",!backend.freeDOutputEnabled)}
+                                        HVButton{width:f(46);height:parent.height;text:freeDPage.fdDraft.output_enabled?"ON":"OFF";selected:freeDPage.fdDraft.output_enabled;onClicked:backend.setFreeDEnabled("Output",!freeDPage.fdDraft.output_enabled)}
                                         Text{width:f(66);anchors.verticalCenter:parent.verticalCenter;text:"IP Address:";color:fg;font.pixelSize:f(11)}
-                                        HVField{width:parent.width-f(48+46+66+31+54+25);height:parent.height;bindModel:true;modelText:backend.freeDOutputIp;font.pixelSize:f(12);onCommit:function(v){backend.setFreeDNetwork("Output","IP",v)}}
+                                        HVField{width:parent.width-f(48+46+66+31+54+25);height:parent.height;bindModel:true;modelText:freeDPage.fdDraft.target_ip;font.pixelSize:f(12);onCommit:function(v){backend.setFreeDNetwork("Output","IP",v)}}
                                         Text{width:f(31);anchors.verticalCenter:parent.verticalCenter;text:"Port:";color:fg;font.pixelSize:f(11)}
-                                        HVField{width:f(54);height:parent.height;bindModel:true;modelText:String(backend.freeDOutputPort);font.pixelSize:f(12);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setFreeDNetwork("Output","Port",v)}}
+                                        HVField{width:f(54);height:parent.height;bindModel:true;modelText:String(freeDPage.fdDraft.target_port);font.pixelSize:f(12);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setFreeDNetwork("Output","Port",v)}}
                                     }
                                     Row { width:parent.width;height:f(22);spacing:0;HVReadout{width:parent.width*.22;height:parent.height;text:"Parameter";textColor:muted;horizontalAlignment:Text.AlignLeft}HVReadout{width:parent.width*.18;height:parent.height;text:"Raw";textColor:muted}HVReadout{width:parent.width*.25;height:parent.height;text:"Decoded";textColor:muted}HVReadout{width:parent.width*.21;height:parent.height;text:"Offset";textColor:muted}HVReadout{width:parent.width*.14;height:parent.height;text:"Invert";textColor:muted} }
                                     Repeater {
                                         model:["X","Y","Z","FPS"]
                                         delegate:Row {
                                             width:parent.width; height:f(31)
-                                            property var fd:backend.freeDOutput
+                                            property var fd:backend.freeDOutputPreview
                                             property bool axis:modelData!=="FPS"
                                             property real decoded:modelData==="X"?Number(fd.x):modelData==="Y"?Number(fd.y):modelData==="Z"?Number(fd.z):Number(fd.fps)
                                             HVReadout{width:parent.width*.22;height:parent.height;text:modelData;horizontalAlignment:Text.AlignLeft}
-                                            HVField{width:parent.width*.18;height:parent.height;bindModel:true;readOnly:parent.axis;modelText:parent.axis?Number(parent.decoded*640).toFixed(0):Number(backend.freeDOutputRate).toFixed(3);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(!parent.axis)backend.setFreeDNetwork("Output","FPS",v)}}
+                                            HVField{width:parent.width*.18;height:parent.height;bindModel:true;readOnly:parent.axis;modelText:parent.axis?Number(parent.decoded*freeDPage.fdDraft.pos_scale).toFixed(0):Number(freeDPage.fdDraft.rate_hz).toFixed(3);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(!parent.axis)backend.setFreeDNetwork("Output","FPS",v)}}
                                             HVReadout{width:parent.width*.25;height:parent.height;text:parent.axis?Number(parent.decoded).toFixed(3)+" m":Number(fd.fps).toFixed(3)}
-                                            HVField{width:parent.width*.21;height:parent.height;bindModel:true;readOnly:!parent.axis;modelText:parent.axis?Number(backend.freeDOutputOffsets[modelData]).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.axis){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Output",modelData,n)}}}
-                                            HVCheck{width:parent.width*.14;height:parent.height;interactive:parent.axis;checked:parent.axis?Boolean(backend.freeDOutputInverts[modelData]):false;onToggled:function(v){if(parent.axis)backend.setFreeDInvert("Output",modelData,v)}}
+                                            HVField{width:parent.width*.21;height:parent.height;bindModel:true;readOnly:!parent.axis;modelText:parent.axis?Number(freeDPage.fdDraft.output_offsets[modelData]).toFixed(3):"0.000";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){if(parent.axis){var n=parseFloat(v);if(!isNaN(n))backend.setFreeDOffset("Output",modelData,n)}}}
+                                            HVCheck{width:parent.width*.14;height:parent.height;interactive:parent.axis;checked:parent.axis?Boolean(freeDPage.fdDraft.output_inverts[modelData]):false;onToggled:function(v){if(parent.axis)backend.setFreeDInvert("Output",modelData,v)}}
                                         }
                                     }
-                                    Row { width:parent.width;height:f(25);Text{text:"Output Rate:  "+Number(backend.freeDOutput.fps).toFixed(3)+" fps";color:fg;font.pixelSize:f(11)}Item{width:f(24);height:1}Text{text:"Status:  "+(backend.freeDOutput.fps>0?"Streaming":"Stopped");color:backend.freeDOutput.fps>0?green:muted;font.pixelSize:f(11)} }
+                                    Row { width:parent.width;height:f(25);Text{text:"Output Rate:  "+Number(backend.freeDOutputPreview.fps).toFixed(3)+" fps";color:fg;font.pixelSize:f(11)}Item{width:f(24);height:1}Text{text:"Status:  "+(backend.freeDOutputPreview.fps>0?"Streaming":"Stopped");color:backend.freeDOutputPreview.fps>0?green:muted;font.pixelSize:f(11)} }
                                 }
                             }
 
@@ -352,7 +356,7 @@ ApplicationWindow {
                                         model:5
                                         delegate:Row {
                                             width:parent.width; height:f(28)
-                                            property var gp:backend.geometryPoints[index]
+                                            property var gp:freeDPage.fdDraft.geometry[index]
                                             Text{width:parent.width*.31;anchors.verticalCenter:parent.verticalCenter;text:parent.gp?parent.gp.name:"";color:fg;font.pixelSize:f(11)}
                                             HVField {
                                                 width: parent.width * 0.23
@@ -421,7 +425,7 @@ ApplicationWindow {
                                             width: parent.width - f(105 + 86)
                                             height: parent.height
                                             bindModel: true
-                                            modelText: Number(backend.skateWeightValue).toFixed(2)
+                                            modelText: Number(freeDPage.fdDraft.skate_weight_value).toFixed(2)
                                             onTextEdited: {
                                                 var n = parseFloat(text)
                                                 if (!isNaN(n))
@@ -437,7 +441,7 @@ ApplicationWindow {
                                             width: f(86)
                                             height: parent.height
                                             model: ["kg", "lbs"]
-                                            currentIndex: backend.skateWeightUnit === "lbs" ? 1 : 0
+                                            currentIndex: freeDPage.fdDraft.skate_weight_unit === "lbs" ? 1 : 0
                                             onActivated: function() { backend.setWeightUnit("Skate", currentText) }
                                         }
                                     }
@@ -449,7 +453,7 @@ ApplicationWindow {
                                             width: parent.width - f(105 + 108)
                                             height: parent.height
                                             bindModel: true
-                                            modelText: Number(backend.cableWeightValue).toFixed(2)
+                                            modelText: Number(freeDPage.fdDraft.cable_weight_value).toFixed(2)
                                             onTextEdited: {
                                                 var n = parseFloat(text)
                                                 if (!isNaN(n))
@@ -465,7 +469,7 @@ ApplicationWindow {
                                             width: f(108)
                                             height: parent.height
                                             model: ["kg/100m", "lbs/100m"]
-                                            currentIndex: backend.cableWeightUnit === "lbs/100m" ? 1 : 0
+                                            currentIndex: freeDPage.fdDraft.cable_weight_unit === "lbs/100m" ? 1 : 0
                                             onActivated: function() { backend.setWeightUnit("Cable", currentText) }
                                         }
                                     }
@@ -477,7 +481,7 @@ ApplicationWindow {
                                             width: parent.width - f(105 + 96)
                                             height: parent.height
                                             bindModel: true
-                                            modelText: Number(backend.cableTensionValue).toFixed(2)
+                                            modelText: Number(freeDPage.fdDraft.cable_tension_value).toFixed(2)
                                             onTextEdited: {
                                                 var n = parseFloat(text)
                                                 if (!isNaN(n))
@@ -493,11 +497,11 @@ ApplicationWindow {
                                             width: f(96)
                                             height: parent.height
                                             model: ["kg", "lbs"]
-                                            currentIndex: backend.cableTensionUnit === "lbs" ? 1 : 0
+                                            currentIndex: freeDPage.fdDraft.cable_tension_unit === "lbs" ? 1 : 0
                                             onActivated: function() { backend.setWeightUnit("Tension", currentText) }
                                         }
                                     }
-                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Highline Mode:";color:fg;font.pixelSize:f(11)}HVCombo{width:parent.width-f(105);height:parent.height;model:["Single Highline","Dual Highline"];currentIndex:backend.highlineMode==="Dual Highline"?1:0;onActivated:function(){backend.setHighlineMode(currentText)}} }
+                                    Row { width:parent.width;height:f(31);Text{width:f(105);anchors.verticalCenter:parent.verticalCenter;text:"Highline Mode:";color:fg;font.pixelSize:f(11)}HVCombo{width:parent.width-f(105);height:parent.height;model:["Single Highline","Dual Highline"];currentIndex:freeDPage.fdDraft.highline_mode==="Dual Highline"?1:0;onActivated:function(){backend.setHighlineMode(currentText)}} }
                                 }
                             }
 
@@ -507,17 +511,17 @@ ApplicationWindow {
                                 Column {
                                     anchors.fill:parent; anchors.margins:f(12); spacing:f(6)
                                     Text { width:parent.width; text:"LENS CALIBRATION"; horizontalAlignment:Text.AlignHCenter; color:blue; font.pixelSize:f(18) }
-                                    Row { width:parent.width;height:f(31);spacing:f(5);Text{width:f(64);anchors.verticalCenter:parent.verticalCenter;text:"Data Type:";color:fg;font.pixelSize:f(11)}HVCombo{width:(parent.width-f(143))/2;height:parent.height;model:["i16","u16","i24","u24"];currentIndex:window.indexOfValue(model,backend.lensType);onActivated:function(){backend.setLensType(currentText)}}Text{width:f(64);anchors.verticalCenter:parent.verticalCenter;text:"Data Scale:";color:fg;font.pixelSize:f(11)}HVCombo{width:(parent.width-f(143))/2;height:parent.height;model:["Auto","Manual","Full Scale"];currentIndex:window.indexOfValue(model,backend.lensScale);onActivated:function(){backend.setLensScale(currentText)}} }
+                                    Row { width:parent.width;height:f(31);spacing:f(5);Text{width:f(64);anchors.verticalCenter:parent.verticalCenter;text:"Data Type:";color:fg;font.pixelSize:f(11)}HVCombo{width:(parent.width-f(143))/2;height:parent.height;model:["i16","u16","i24","u24"];currentIndex:window.indexOfValue(model,freeDPage.fdDraft.lens_type);onActivated:function(){backend.setLensType(currentText)}}Text{width:f(64);anchors.verticalCenter:parent.verticalCenter;text:"Data Scale:";color:fg;font.pixelSize:f(11)}HVCombo{width:(parent.width-f(143))/2;height:parent.height;model:["Auto","Manual","Full Scale"];currentIndex:window.indexOfValue(model,freeDPage.fdDraft.lens_scale_mode);onActivated:function(){backend.setLensScale(currentText)}} }
                                     Text { text:"LIVE LENS VALUES"; color:blue; font.pixelSize:f(11) }
-                                    Row { width:parent.width;height:f(31);spacing:f(6);Text{width:f(50);anchors.verticalCenter:parent.verticalCenter;text:"Zoom:";color:fg;font.pixelSize:f(11)}HVReadout{width:(parent.width-f(112))/2;height:parent.height;text:Number(backend.freeDInput.zoom).toFixed(0)+" ("+Number(backend.freeDInput.zoomPct).toFixed(3)+"%)"}Text{width:f(50);anchors.verticalCenter:parent.verticalCenter;text:"Focus:";color:fg;font.pixelSize:f(11)}HVReadout{width:(parent.width-f(112))/2;height:parent.height;text:Number(backend.freeDInput.focus).toFixed(0)+" ("+Number(backend.freeDInput.focusPct).toFixed(3)+"%)"} }
+                                    Row { width:parent.width;height:f(31);spacing:f(6);Text{width:f(50);anchors.verticalCenter:parent.verticalCenter;text:"Zoom:";color:fg;font.pixelSize:f(11)}HVReadout{width:(parent.width-f(112))/2;height:parent.height;text:Number(backend.freeDInputPreview.zoom).toFixed(0)+" ("+Number(backend.freeDInputPreview.zoomPct).toFixed(3)+"%)"}Text{width:f(50);anchors.verticalCenter:parent.verticalCenter;text:"Focus:";color:fg;font.pixelSize:f(11)}HVReadout{width:(parent.width-f(112))/2;height:parent.height;text:Number(backend.freeDInputPreview.focus).toFixed(0)+" ("+Number(backend.freeDInputPreview.focusPct).toFixed(3)+"%)"} }
                                     Rectangle { width:parent.width;height:1;color:"#343a3e" }
                                     Text { text:"ZOOM (Wide ↔ Tele)"; color:blue; font.pixelSize:f(11) }
                                     Row { width:parent.width;height:f(18);Text{width:f(48);text:"Position";color:muted;font.pixelSize:f(9)}Text{width:parent.width-f(48+72+66);text:"Raw Value";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter}Text{width:f(72);text:"Decoded";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter}Text{width:f(66);text:"Calibrate";color:muted;font.pixelSize:f(9);horizontalAlignment:Text.AlignHCenter} }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Wide";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.zoom_wide).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_wide",n)}}HVReadout{width:f(72);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_wide",backend.freeDInput.zoom)} }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Tele";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.zoom_tele).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_tele",n)}}HVReadout{width:f(72);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_tele",backend.freeDInput.zoom)} }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Wide";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(freeDPage.fdDraft.lens_cal.zoom_wide).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_wide",n)}}HVReadout{width:f(72);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_wide",backend.freeDInputPreview.zoom)} }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Tele";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(freeDPage.fdDraft.lens_cal.zoom_tele).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("zoom_tele",n)}}HVReadout{width:f(72);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("zoom_tele",backend.freeDInputPreview.zoom)} }
                                     Text { text:"FOCUS (Near ↔ Far)"; color:blue; font.pixelSize:f(11) }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Near";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.focus_near).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_near",n)}}HVReadout{width:f(72);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_near",backend.freeDInput.focus)} }
-                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Far";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(backend.lensCalibration.focus_far).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_far",n)}}HVReadout{width:f(72);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_far",backend.freeDInput.focus)} }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Near";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(freeDPage.fdDraft.lens_cal.focus_near).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_near",n)}}HVReadout{width:f(72);height:parent.height;text:"0.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_near",backend.freeDInputPreview.focus)} }
+                                    Row { width:parent.width;height:f(29);spacing:f(4);Text{width:f(48);anchors.verticalCenter:parent.verticalCenter;text:"Far";color:fg;font.pixelSize:f(11)}HVField{width:parent.width-f(48+72+66+12);height:parent.height;bindModel:true;modelText:Number(freeDPage.fdDraft.lens_cal.focus_far).toFixed(0);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setLensCalibration("focus_far",n)}}HVReadout{width:f(72);height:parent.height;text:"100.00 %"}HVButton{width:f(66);height:parent.height;text:"Cal";onClicked:backend.captureLens("focus_far",backend.freeDInputPreview.focus)} }
                                 }
                             }
                         }
@@ -527,8 +531,8 @@ ApplicationWindow {
                         width:parent.width; height:parent.height*(1-.66)-f(8)
                         Row {
                             anchors.fill:parent; spacing:f(8)
-                            Panel { width:(parent.width-f(8))/2;height:parent.height;SpanDiagram{anchors.fill:parent;title:"Top View";subtitle:"X (Tracking) / Z (Offset)";cableProfile:backend.cableProfile;geometryPoints:backend.geometryPoints;showGeometryPoints:true;showPresets:false;showSkate:false;showReference:false;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
-                            Panel { width:(parent.width-f(8))/2;height:parent.height;SpanDiagram{anchors.fill:parent;title:"Side View";subtitle:"X (Tracking) / Y (Sag)";sideView:true;cableProfile:backend.cableProfile;geometryPoints:backend.geometryPoints;showGeometryPoints:true;showPresets:false;showSkate:false;showReference:false;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
+                            Panel { width:(parent.width-f(8))/2;height:parent.height;SpanDiagram{anchors.fill:parent;title:"Top View";subtitle:"X (Tracking) / Z (Offset)";cableProfile:backend.freeDPreviewCableProfile;geometryPoints:freeDPage.fdDraft.geometry;showGeometryPoints:true;showPresets:false;showSkate:false;showReference:false;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
+                            Panel { width:(parent.width-f(8))/2;height:parent.height;SpanDiagram{anchors.fill:parent;title:"Side View";subtitle:"X (Tracking) / Y (Sag)";sideView:true;cableProfile:backend.freeDPreviewCableProfile;geometryPoints:freeDPage.fdDraft.geometry;showGeometryPoints:true;showPresets:false;showSkate:false;showReference:false;nearRamp:backend.nearRampDistance;farRamp:backend.farRampDistance} }
                         }
                     }
                 }

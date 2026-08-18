@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Dialogs
 import "../components"
 
 Item {
@@ -17,11 +18,30 @@ Item {
         return 0
     }
 
+
+    FileDialog {
+        id: saveConfigDialog
+        title: "Save HV P2P SRVR Configuration"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["HV P2P configuration (*.hvp2p.json)", "JSON files (*.json)"]
+        onAccepted: backend.exportConfigFile(selectedFile.toString())
+    }
+
+    FileDialog {
+        id: loadConfigDialog
+        title: "Load HV P2P SRVR Configuration"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["HV P2P configuration (*.hvp2p.json *.json)", "JSON files (*.json)"]
+        onAccepted: backend.stageConfigFile(selectedFile.toString())
+    }
+
     property var auxChoices: [
         "None", "Drive Mode", "Acceleration Mode", "Battery Change Mode",
         "Near Limit Save", "Near Limit Recall", "Near Limit Slip",
         "Far Limit Save", "Far Limit Recall", "Far Limit Slip",
         "Ref Point Save", "Ref Point Recall", "Ref Point Slip",
+        "Preset 1 Save", "Preset 2 Save", "Preset 3 Save", "Preset 4 Save", "Preset 5 Save",
+        "Preset 6 Save", "Preset 7 Save", "Preset 8 Save", "Preset 9 Save", "Preset 10 Save",
         "Preset 1 Recall", "Preset 2 Recall", "Preset 3 Recall", "Preset 4 Recall", "Preset 5 Recall",
         "Preset 6 Recall", "Preset 7 Recall", "Preset 8 Recall", "Preset 9 Recall", "Preset 10 Recall",
         "Preset 1 Slip", "Preset 2 Slip", "Preset 3 Slip", "Preset 4 Slip", "Preset 5 Slip",
@@ -48,10 +68,10 @@ Item {
                     Column {
                         anchors.fill: parent; anchors.margins: root.f(17); spacing: root.f(8)
                         Text { text:"⌘  CTRL"; color:root.cyan; font.pixelSize:root.f(17); font.weight:Font.Medium }
-                        Row { width:parent.width; height:root.f(31); Text{width:root.f(145);anchors.verticalCenter:parent.verticalCenter;text:"CTRL IP";color:root.fg;font.pixelSize:root.f(12)} HVField{width:parent.width-root.f(145);height:parent.height;bindModel:true;modelText:backend.ctrlIp;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setNetwork("CTRL",v)}} }
+                        Row { width:parent.width; height:root.f(31); Text{width:root.f(145);anchors.verticalCenter:parent.verticalCenter;text:"CTRL IP";color:root.fg;font.pixelSize:root.f(12)} HVField{width:parent.width-root.f(145);height:parent.height;bindModel:true;modelText:backend.setupDraft.ctrl_ip;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setSetupNetwork("CTRL",v)}} }
                         Row { width:parent.width; height:root.f(25); Text{width:root.f(145);anchors.verticalCenter:parent.verticalCenter;text:"CTRL-TS Link";color:root.fg;font.pixelSize:root.f(12)} StatusDot{width:root.f(11);height:root.f(11);radius:root.f(6);anchors.verticalCenter:parent.verticalCenter;active:backend.ctrlTsConnected} Text{anchors.verticalCenter:parent.verticalCenter;leftPadding:root.f(8);text:backend.ctrlTsConnected?"Connected":"Disconnected";color:root.fg;font.pixelSize:root.f(12)} }
                         Row { width:parent.width; height:root.f(25); Text{width:root.f(145);anchors.verticalCenter:parent.verticalCenter;text:"ADS1115 Link";color:root.fg;font.pixelSize:root.f(12)} StatusDot{width:root.f(11);height:root.f(11);radius:root.f(6);anchors.verticalCenter:parent.verticalCenter;active:backend.ads1115Connected} Text{anchors.verticalCenter:parent.verticalCenter;leftPadding:root.f(8);text:backend.ads1115Connected?"Connected":"Fault";color:root.fg;font.pixelSize:root.f(12)} }
-                        Row { width:parent.width; height:root.f(31); Text{width:root.f(145);anchors.verticalCenter:parent.verticalCenter;text:"Direction";color:root.fg;font.pixelSize:root.f(12)} HVCombo{width:parent.width-root.f(145);height:parent.height;model:["Normal","Inverted"];currentIndex:backend.ctrlInverted?1:0;onActivated:function(){backend.setDirection("CTRL",currentIndex===1)}} }
+                        Row { width:parent.width; height:root.f(31); Text{width:root.f(145);anchors.verticalCenter:parent.verticalCenter;text:"Direction";color:root.fg;font.pixelSize:root.f(12)} HVCombo{width:parent.width-root.f(145);height:parent.height;model:["Normal","Inverted"];currentIndex:backend.setupDraft.reverse_joystick?1:0;onActivated:function(){backend.setSetupDirection("CTRL",currentIndex===1)}} }
                         Rectangle { width:parent.width; height:1; color:root.line }
                         Text { text:"JOYSTICK CALIBRATION"; color:root.cyan; font.pixelSize:root.f(12) }
                         Item {
@@ -65,9 +85,9 @@ Item {
                         Row {
                             width:parent.width; height:root.f(31); spacing:root.f(4)
                             Text{width:root.f(100);anchors.verticalCenter:parent.verticalCenter;text:"Deadband";color:root.fg;font.pixelSize:root.f(11)}
-                            HVButton{width:root.f(35);height:parent.height;text:"−";onClicked:backend.setJoystickDeadband(Math.max(0,backend.joystickDeadband-0.5))}
-                            HVField{width:parent.width-root.f(100+35+35+12);height:parent.height;bindModel:true;modelText:Number(backend.joystickDeadband).toFixed(1)+" %";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setJoystickDeadband(n)}}
-                            HVButton{width:root.f(35);height:parent.height;text:"+";onClicked:backend.setJoystickDeadband(Math.min(25,backend.joystickDeadband+0.5))}
+                            HVButton{width:root.f(35);height:parent.height;text:"−";onClicked:backend.setSetupJoystickDeadband(Math.max(0,backend.setupDraft.joystick_deadband_pct-0.5))}
+                            HVField{width:parent.width-root.f(100+35+35+12);height:parent.height;bindModel:true;modelText:Number(backend.setupDraft.joystick_deadband_pct).toFixed(1)+" %";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setSetupJoystickDeadband(n)}}
+                            HVButton{width:root.f(35);height:parent.height;text:"+";onClicked:backend.setSetupJoystickDeadband(Math.min(25,backend.setupDraft.joystick_deadband_pct+0.5))}
                         }
                     }
                 }
@@ -79,13 +99,13 @@ Item {
                     Column {
                         anchors.fill: parent; anchors.margins: root.f(17); spacing: root.f(9)
                         Text { text:"♨  W1P"; color:root.cyan; font.pixelSize:root.f(17); font.weight:Font.Medium }
-                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"W1P IP";color:root.fg;font.pixelSize:root.f(12)} HVField{width:parent.width-root.f(108);height:parent.height;bindModel:true;modelText:backend.w1pIp;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setNetwork("W1P",v)}} }
+                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"W1P IP";color:root.fg;font.pixelSize:root.f(12)} HVField{width:parent.width-root.f(108);height:parent.height;bindModel:true;modelText:backend.setupDraft.w1p_ip;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.setSetupNetwork("W1P",v)}} }
                         Row { width:parent.width; height:root.f(25); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"W1P-TS Link";color:root.fg;font.pixelSize:root.f(12)} StatusDot{width:root.f(11);height:root.f(11);radius:root.f(6);anchors.verticalCenter:parent.verticalCenter;active:backend.w1pTsConnected} Text{anchors.verticalCenter:parent.verticalCenter;leftPadding:root.f(8);text:backend.w1pTsConnected?"Connected":"Disconnected";color:root.fg;font.pixelSize:root.f(12)} }
                         Row { width:parent.width; height:root.f(25); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"RS485 Link";color:root.fg;font.pixelSize:root.f(12)} StatusDot{width:root.f(11);height:root.f(11);radius:root.f(6);anchors.verticalCenter:parent.verticalCenter;active:backend.rs485Connected} Text{anchors.verticalCenter:parent.verticalCenter;leftPadding:root.f(8);text:backend.rs485Connected?"Connected":"Disconnected";color:root.fg;font.pixelSize:root.f(12)} }
-                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"Direction";color:root.fg;font.pixelSize:root.f(12)} HVCombo{width:parent.width-root.f(108);height:parent.height;model:["Normal","Inverted"];currentIndex:backend.w1pInverted?1:0;onActivated:function(){backend.setDirection("W1P",currentIndex===1)}} }
+                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"Direction";color:root.fg;font.pixelSize:root.f(12)} HVCombo{width:parent.width-root.f(108);height:parent.height;model:["Normal","Inverted"];currentIndex:backend.setupDraft.reverse_motor?1:0;onActivated:function(){backend.setSetupDirection("W1P",currentIndex===1)}} }
                         Rectangle { width:parent.width; height:1; color:root.line }
-                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"CMD Units Per M";color:root.fg;font.pixelSize:root.f(11)} HVField{width:parent.width-root.f(152);height:parent.height;bindModel:true;modelText:Number(backend.unitsPerM).toFixed(2);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setUnitsPerM(n)}} Text{width:root.f(44);anchors.verticalCenter:parent.verticalCenter;text:"u/m";horizontalAlignment:Text.AlignHCenter;color:root.fg;font.pixelSize:root.f(11)} }
-                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"Position Source";color:root.fg;font.pixelSize:root.f(11)} HVCombo{width:parent.width-root.f(108);height:parent.height;model:["Encoder"];currentIndex:0;onActivated:function(){backend.setPositionSource(currentText)}} }
+                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"CMD Units Per M";color:root.fg;font.pixelSize:root.f(11)} HVField{width:parent.width-root.f(152);height:parent.height;bindModel:true;modelText:Number(backend.setupDraft.units_per_m).toFixed(2);horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setSetupUnitsPerM(n)}} Text{width:root.f(44);anchors.verticalCenter:parent.verticalCenter;text:"u/m";horizontalAlignment:Text.AlignHCenter;color:root.fg;font.pixelSize:root.f(11)} }
+                        Row { width:parent.width; height:root.f(31); Text{width:root.f(108);anchors.verticalCenter:parent.verticalCenter;text:"Position Source";color:root.fg;font.pixelSize:root.f(11)} HVCombo{width:parent.width-root.f(108);height:parent.height;model:["Encoder"];currentIndex:0;onActivated:function(){backend.setSetupPositionSource(currentText)}} }
                     }
                 }
 
@@ -97,13 +117,13 @@ Item {
                         anchors.fill: parent; anchors.margins: root.f(15); spacing: root.f(7)
                         Text { text:"〽  MOTION PROFILES"; color:root.cyan; font.pixelSize:root.f(17); font.weight:Font.Medium }
                         Row {
-                            width:parent.width; height:root.f(246)
+                            width:parent.width; height:root.f(250)
                             Item {
                                 width:(parent.width-root.f(18))/2; height:parent.height
                                 Column {
-                                    anchors.fill:parent; spacing:root.f(4)
+                                    anchors.fill:parent; spacing:root.f(2)
                                     Text { width:parent.width; text:"MODE 1"; horizontalAlignment:Text.AlignHCenter; color:root.cyan; font.pixelSize:root.f(11) }
-                                    Row { width:parent.width;height:root.f(31);Text{width:root.f(118);anchors.verticalCenter:parent.verticalCenter;text:"Name";color:root.fg;font.pixelSize:root.f(11)}HVField{width:parent.width-root.f(118);height:parent.height;bindModel:true;modelText:backend.driveMode1Name;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.renameDriveMode(0,v)}} }
+                                    Row { width:parent.width;height:root.f(31);Text{width:root.f(118);anchors.verticalCenter:parent.verticalCenter;text:"Name";color:root.fg;font.pixelSize:root.f(11)}HVField{width:parent.width-root.f(118);height:parent.height;bindModel:true;modelText:backend.setupDraft.drive_modes[0].name;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.renameSetupDriveMode(0,v)}} }
                                     Repeater {
                                         model:[
                                             {label:"Max Speed",key:"max_speed_mps",unit:"m/s"},
@@ -115,9 +135,9 @@ Item {
                                         ]
                                         delegate:Row {
                                             width:parent.width;height:root.f(31)
-                                            property var dm: backend.driveModes[0]
+                                            property var dm: backend.setupDraft.drive_modes[0]
                                             Text{width:root.f(118);anchors.verticalCenter:parent.verticalCenter;text:modelData.label;color:root.fg;font.pixelSize:root.f(11)}
-                                            HVField{width:parent.width-root.f(166);height:parent.height;bindModel:true;modelText:parent.dm?Number(parent.dm[modelData.key]).toFixed(1):"0.0";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setDriveModeValue(0,modelData.key,n)}}
+                                            HVField{width:parent.width-root.f(166);height:parent.height;bindModel:true;modelText:parent.dm?Number(parent.dm[modelData.key]).toFixed(1):"0.0";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setSetupDriveModeValue(0,modelData.key,n)}}
                                             Text{width:root.f(48);anchors.verticalCenter:parent.verticalCenter;text:modelData.unit;horizontalAlignment:Text.AlignHCenter;color:root.fg;font.pixelSize:root.f(11)}
                                         }
                                     }
@@ -127,9 +147,9 @@ Item {
                             Item {
                                 width:(parent.width-root.f(18))/2; height:parent.height
                                 Column {
-                                    anchors.fill:parent; anchors.leftMargin:root.f(17); spacing:root.f(4)
+                                    anchors.fill:parent; anchors.leftMargin:root.f(17); spacing:root.f(2)
                                     Text { width:parent.width; text:"MODE 2"; horizontalAlignment:Text.AlignHCenter; color:root.cyan; font.pixelSize:root.f(11) }
-                                    Row { width:parent.width;height:root.f(31);Text{width:root.f(118);anchors.verticalCenter:parent.verticalCenter;text:"Name";color:root.fg;font.pixelSize:root.f(11)}HVField{width:parent.width-root.f(118);height:parent.height;bindModel:true;modelText:backend.driveMode2Name;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.renameDriveMode(1,v)}} }
+                                    Row { width:parent.width;height:root.f(31);Text{width:root.f(118);anchors.verticalCenter:parent.verticalCenter;text:"Name";color:root.fg;font.pixelSize:root.f(11)}HVField{width:parent.width-root.f(118);height:parent.height;bindModel:true;modelText:backend.setupDraft.drive_modes[1].name;horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){backend.renameSetupDriveMode(1,v)}} }
                                     Repeater {
                                         model:[
                                             {label:"Max Speed",key:"max_speed_mps",unit:"m/s"},
@@ -141,9 +161,9 @@ Item {
                                         ]
                                         delegate:Row {
                                             width:parent.width;height:root.f(31)
-                                            property var dm: backend.driveModes[1]
+                                            property var dm: backend.setupDraft.drive_modes[1]
                                             Text{width:root.f(118);anchors.verticalCenter:parent.verticalCenter;text:modelData.label;color:root.fg;font.pixelSize:root.f(11)}
-                                            HVField{width:parent.width-root.f(166);height:parent.height;bindModel:true;modelText:parent.dm?Number(parent.dm[modelData.key]).toFixed(1):"0.0";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setDriveModeValue(1,modelData.key,n)}}
+                                            HVField{width:parent.width-root.f(166);height:parent.height;bindModel:true;modelText:parent.dm?Number(parent.dm[modelData.key]).toFixed(1):"0.0";horizontalAlignment:TextInput.AlignHCenter;onCommit:function(v){var n=parseFloat(v);if(!isNaN(n))backend.setSetupDriveModeValue(1,modelData.key,n)}}
                                             Text{width:root.f(48);anchors.verticalCenter:parent.verticalCenter;text:modelData.unit;horizontalAlignment:Text.AlignHCenter;color:root.fg;font.pixelSize:root.f(11)}
                                         }
                                     }
@@ -154,8 +174,8 @@ Item {
                         Text { text:"DRIVE BEHAVIOUR"; color:root.cyan; font.pixelSize:root.f(12) }
                         Row {
                             width:parent.width;height:root.f(31);spacing:root.f(28)
-                            Row { width:(parent.width-root.f(28))/2;height:parent.height;Text{width:root.f(126);anchors.verticalCenter:parent.verticalCenter;text:"Acceleration Mode";color:root.fg;font.pixelSize:root.f(11)}HVCombo{width:parent.width-root.f(126);height:parent.height;model:["Power","Speed"];currentIndex:root.idx(model,backend.accelerationMode);onActivated:function(){backend.setAccelerationMode(currentText)}} }
-                            Row { width:(parent.width-root.f(28))/2;height:parent.height;Text{width:root.f(126);anchors.verticalCenter:parent.verticalCenter;text:"Battery Change Mode";color:root.fg;font.pixelSize:root.f(11)}HVCombo{width:parent.width-root.f(126);height:parent.height;model:["Off","On"];currentIndex:backend.batteryChange?1:0;onActivated:function(){backend.setBatteryChange(currentIndex===1)}} }
+                            Row { width:(parent.width-root.f(28))/2;height:parent.height;Text{width:root.f(126);anchors.verticalCenter:parent.verticalCenter;text:"Acceleration Mode";color:root.fg;font.pixelSize:root.f(11)}HVCombo{width:parent.width-root.f(126);height:parent.height;model:["Power","Speed"];currentIndex:root.idx(model,backend.setupDraft.acceleration_mode);onActivated:function(){backend.setSetupAccelerationMode(currentText)}} }
+                            Row { width:(parent.width-root.f(28))/2;height:parent.height;Text{width:root.f(126);anchors.verticalCenter:parent.verticalCenter;text:"Battery Change Mode";color:root.fg;font.pixelSize:root.f(11)}HVCombo{width:parent.width-root.f(126);height:parent.height;model:["Off","On"];currentIndex:backend.setupDraft.battery_change_mode?1:0;onActivated:function(){backend.setSetupBatteryChange(currentIndex===1)}} }
                         }
                     }
                 }
@@ -167,8 +187,8 @@ Item {
                     Column {
                         anchors.fill:parent; anchors.margins:root.f(18); spacing:root.f(58)
                         Text { text:"ϟ  ACTIONS"; color:root.cyan; font.pixelSize:root.f(17); font.weight:Font.Medium }
-                        HVButton { anchors.horizontalCenter:parent.horizontalCenter; width:parent.width-root.f(48); height:root.f(50); text:"⇩   SAVE CONFIG"; accent:root.cyan; onClicked:backend.saveConfig() }
-                        HVButton { anchors.horizontalCenter:parent.horizontalCenter; width:parent.width-root.f(48); height:root.f(50); text:"⇧   LOAD CONFIG"; accent:root.cyan; onClicked:backend.loadConfig() }
+                        HVButton { anchors.horizontalCenter:parent.horizontalCenter; width:parent.width-root.f(48); height:root.f(50); text:"⇩   SAVE CONFIG"; accent:root.cyan; onClicked:saveConfigDialog.open() }
+                        HVButton { anchors.horizontalCenter:parent.horizontalCenter; width:parent.width-root.f(48); height:root.f(50); text:"⇧   LOAD CONFIG"; accent:root.cyan; onClicked:loadConfigDialog.open() }
                     }
                 }
             }
@@ -192,7 +212,7 @@ Item {
                             delegate:Row {
                                 width:parent.width;height:root.f(31)
                                 Text{width:root.f(62);anchors.verticalCenter:parent.verticalCenter;text:"AUX "+(index+1);color:root.fg;font.pixelSize:root.f(11)}
-                                HVCombo{width:parent.width-root.f(62);height:parent.height;model:root.auxChoices;currentIndex:root.idx(model,backend.ctrlAuxAssignments[index]);onActivated:function(){backend.setAuxAssignment("CTRL",index,currentText)}}
+                                HVCombo{width:parent.width-root.f(62);height:parent.height;model:root.auxChoices;currentIndex:root.idx(model,backend.setupDraft.ctrl_aux_assignments[index]);onActivated:function(){backend.setSetupAuxAssignment("CTRL",index,currentText)}}
                             }
                         }
                     }
@@ -208,7 +228,7 @@ Item {
                             delegate:Row {
                                 width:parent.width;height:root.f(31)
                                 Text{width:root.f(56);anchors.verticalCenter:parent.verticalCenter;text:"AUX "+(index+1);color:root.fg;font.pixelSize:root.f(11)}
-                                HVCombo{width:parent.width-root.f(56);height:parent.height;model:root.auxChoices;currentIndex:root.idx(model,backend.w1pAuxAssignments[index]);onActivated:function(){backend.setAuxAssignment("W1P",index,currentText)}}
+                                HVCombo{width:parent.width-root.f(56);height:parent.height;model:root.auxChoices;currentIndex:root.idx(model,backend.setupDraft.w1p_aux_assignments[index]);onActivated:function(){backend.setSetupAuxAssignment("W1P",index,currentText)}}
                             }
                         }
                     }

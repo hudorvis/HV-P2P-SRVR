@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-import json, math, os, queue, socket, struct, threading, time
+import copy, json, math, os, queue, socket, struct, threading, time
+from urllib.parse import unquote, urlparse
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer
 
@@ -135,7 +136,7 @@ class HVP2PBackend(QObject):
     calibrationChanged = Signal()
     joystickCalibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.13", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.14", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
@@ -279,6 +280,16 @@ class HVP2PBackend(QObject):
         self._load_config()
         self._saved_freed_snapshot = self._freed_snapshot()
         self._saved_setup_snapshot = self._setup_snapshot()
+        # Setup and Free-D are explicit Apply/Reset pages. Their editable values
+        # live in independent drafts so typing never changes the live motion,
+        # networking or Free-D state until Apply is deliberately pressed.
+        self._setup_draft = copy.deepcopy(self._saved_setup_snapshot)
+        self._freed_draft = copy.deepcopy(self._saved_freed_snapshot)
+        self._pending_import_config = None
+        self._pending_import_setup_handled = True
+        self._pending_import_freed_handled = True
+        self._setup_draft_dirty = False
+        self._freed_draft_dirty = False
         self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
         if not self.smoke_test:
             self.w1p.start()
@@ -1260,6 +1271,155 @@ class HVP2PBackend(QObject):
             self._sync_w1p_settings()
             self._sync_service_mode_to_winch(force=True)
 
+    def _setup_snapshot_from_config(self, c: dict) -> dict:
+        """Normalise a transferable config into a Setup draft without applying it."""
+        snap = self._setup_snapshot()
+        if not isinstance(c, dict):
+            return snap
+        snap["ctrl_ip"] = str(c.get("ctrl_ip", snap["ctrl_ip"]) or snap["ctrl_ip"])
+        snap["w1p_ip"] = str(c.get("w1p_ip", snap["w1p_ip"]) or snap["w1p_ip"])
+        snap["reverse_joystick"] = bool(c.get("reverse_joystick", snap["reverse_joystick"]))
+        snap["reverse_motor"] = bool(c.get("reverse_motor", snap["reverse_motor"]))
+        try: snap["joystick_deadband_pct"] = max(0.0, min(25.0, float(c.get("joystick_deadband_pct", snap["joystick_deadband_pct"]))))
+        except Exception: pass
+        joy = c.get("joystick_calibration") if isinstance(c.get("joystick_calibration"), dict) else {}
+        if joy:
+            try:
+                left = float(joy.get("left", snap["joystick_calibration"]["left"]))
+                centre = float(joy.get("centre", snap["joystick_calibration"]["centre"]))
+                right = float(joy.get("right", snap["joystick_calibration"]["right"]))
+                if abs(left-centre) >= 0.05 and abs(right-centre) >= 0.05 and (left-centre)*(right-centre) < 0.0:
+                    snap["joystick_calibration"] = {"left":left, "centre":centre, "right":right}
+            except Exception:
+                pass
+        snap["position_source"] = "Encoder"
+        try: snap["units_per_m"] = max(1.0, float(c.get("units_per_m", snap["units_per_m"])))
+        except Exception: pass
+        snap["drive_modes"] = self._normalise_drive_modes(c.get("drive_modes", snap["drive_modes"]))
+        try: snap["active_drive_mode"] = 0 if int(c.get("active_drive_mode", snap["active_drive_mode"])) <= 0 else 1
+        except Exception: snap["active_drive_mode"] = 0
+        snap["acceleration_mode"] = "Power" if str(c.get("acceleration_mode", snap["acceleration_mode"])).lower().startswith("power") else "Speed"
+        snap["battery_change_mode"] = bool(c.get("battery_change_mode", snap["battery_change_mode"]))
+        snap["ctrl_aux_assignments"] = [str(x) for x in self._normalise_list(c.get("ctrl_aux_assignments"), snap["ctrl_aux_assignments"], 5)]
+        snap["w1p_aux_assignments"] = [str(x) for x in self._normalise_list(c.get("w1p_aux_assignments"), snap["w1p_aux_assignments"], 5)]
+        return snap
+
+    def _freed_snapshot_from_config(self, c: dict) -> dict:
+        """Normalise a transferable config into a Free-D draft without applying it."""
+        snap = self._freed_snapshot()
+        if not isinstance(c, dict):
+            return snap
+        fd = c.get("free_d") if isinstance(c.get("free_d"), dict) else {}
+        snap["input_enabled"] = bool(fd.get("input_enabled", snap["input_enabled"]))
+        snap["input_bind_ip"] = str(fd.get("input_bind_ip", snap["input_bind_ip"]))
+        try: snap["input_port"] = max(1, min(65535, int(fd.get("input_port", snap["input_port"]))))
+        except Exception: pass
+        snap["output_enabled"] = bool(fd.get("output_enabled", snap["output_enabled"]))
+        snap["target_ip"] = str(fd.get("target_ip", snap["target_ip"]))
+        try: snap["target_port"] = max(1, min(65535, int(fd.get("target_port", snap["target_port"]))))
+        except Exception: pass
+        try: snap["rate_hz"] = max(1.0, min(100.0, float(fd.get("rate_hz", snap["rate_hz"]))))
+        except Exception: pass
+        try: snap["pos_scale"] = max(1.0, float(fd.get("pos_scale", snap["pos_scale"])))
+        except Exception: pass
+        for src_key, axes in (("input_offsets", ("Pan","Tilt","Roll")), ("output_offsets", ("X","Y","Z"))):
+            vals = fd.get(src_key) if isinstance(fd.get(src_key), dict) else {}
+            for key in axes:
+                try: snap[src_key][key] = float(vals.get(key, snap[src_key][key]))
+                except Exception: pass
+        for src_key, axes in (("input_inverts", ("Pan","Tilt","Roll","Zoom","Focus")), ("output_inverts", ("X","Y","Z"))):
+            vals = fd.get(src_key) if isinstance(fd.get(src_key), dict) else {}
+            for key in axes:
+                snap[src_key][key] = bool(vals.get(key, snap[src_key][key]))
+        lt = str(fd.get("lens_type", snap["lens_type"]))
+        snap["lens_type"] = lt if lt in ("i16","u16","i24","u24") else "u16"
+        snap["lens_scale_mode"] = self._normalise_lens_scale(fd.get("lens_scale_mode", snap["lens_scale_mode"]))
+        cal = fd.get("lens_cal") if isinstance(fd.get("lens_cal"), dict) else {}
+        for key in ("zoom_wide","zoom_tele","focus_near","focus_far"):
+            try: snap["lens_cal"][key] = float(cal.get(key, snap["lens_cal"][key]))
+            except Exception: pass
+        seen = fd.get("lens_auto_seen") if isinstance(fd.get("lens_auto_seen"), dict) else {}
+        for key in ("zoom_min","zoom_max","focus_min","focus_max"):
+            if key in seen: snap["lens_auto_seen"][key] = seen.get(key)
+        geom = c.get("geometry") if isinstance(c.get("geometry"), list) else snap["geometry"]
+        if len(geom) >= 5:
+            out = []
+            for i in range(5):
+                src = geom[i] if isinstance(geom[i], dict) else snap["geometry"][i]
+                d = dict(snap["geometry"][i]); d.update(src)
+                d["name"] = str(d.get("name") or ("P1 (Near)" if i == 0 else "P5 (Far)" if i == 4 else f"P{i+1}"))
+                try: d["x"] = float(d.get("x", i*25.0))
+                except Exception: d["x"] = float(i*25.0)
+                try: d["y"] = float(d.get("y", 0.0))
+                except Exception: d["y"] = 0.0
+                if i in (0,4):
+                    try: d["z"] = float(d.get("z", 0.0) or 0.0)
+                    except Exception: d["z"] = 0.0
+                else: d["z"] = None
+                out.append(d)
+            snap["geometry"] = out
+        try: snap["skate_weight_kg"] = max(0.0, float(fd.get("skate_weight_kg", fd.get("static_weight_kg", snap["skate_weight_kg"]))))
+        except Exception: pass
+        try: snap["cable_weight_kg100m"] = max(0.0, float(fd.get("cable_weight_kg100m", snap["cable_weight_kg100m"])))
+        except Exception: pass
+        try: snap["cable_tension_kg"] = max(0.01, float(fd.get("cable_tension_kg", snap["cable_tension_kg"])))
+        except Exception: pass
+        snap["skate_weight_unit"] = "lbs" if str(fd.get("skate_weight_unit", fd.get("static_weight_unit", snap["skate_weight_unit"]))).lower().startswith("lb") else "kg"
+        snap["cable_weight_unit"] = "lbs/100m" if str(fd.get("cable_weight_unit", snap["cable_weight_unit"])).lower().startswith("lb") else "kg/100m"
+        snap["cable_tension_unit"] = "lbs" if str(fd.get("cable_tension_unit", snap["cable_tension_unit"])).lower().startswith("lb") else "kg"
+        snap["highline_mode"] = "Dual Highline" if str(fd.get("highline_mode", snap["highline_mode"])).lower().startswith("dual") else "Single Highline"
+        return snap
+
+    @staticmethod
+    def _dialog_path(value) -> Path:
+        text = str(value or "").strip()
+        if text.startswith("file:"):
+            parsed = urlparse(text)
+            text = unquote(parsed.path)
+        return Path(text).expanduser()
+
+    def _apply_imported_run_config(self, c: dict) -> None:
+        """Apply transferable Run-only values when Setup Apply is pressed."""
+        if not isinstance(c, dict):
+            return
+        default_names = [f"P{i}" for i in range(1,11)]
+        if "preset_names" in c:
+            self.preset_names = [str(x or default_names[i]) for i,x in enumerate(self._normalise_list(c.get("preset_names"), default_names, 10))]
+        if "preset_positions" in c:
+            raw_pos = self._normalise_list(c.get("preset_positions"), [None]*10, 10)
+            vals = []
+            for v in raw_pos:
+                try: vals.append(None if v is None else float(v))
+                except Exception: vals.append(None)
+            self.preset_positions = vals
+        if "preset_visible" in c:
+            self.preset_visible = [bool(x) for x in self._normalise_list(c.get("preset_visible"), [True]*10, 10)]
+        lim = c.get("limits") if isinstance(c.get("limits"), dict) else None
+        if lim is not None:
+            try: self.state.near_limit.position_m = float(lim.get("near", self.state.near_limit.position_m or 0.0))
+            except Exception: pass
+            try: self.state.far_limit.position_m = float(lim.get("far", self.state.far_limit.position_m or 100.0))
+            except Exception: pass
+            try: self.state.ref_point.position_m = float(lim.get("ref", self.state.ref_point.position_m or 50.0))
+            except Exception: pass
+            raw = lim.get("raw") if isinstance(lim.get("raw"), dict) else {}
+            for key in ("near","ref","far"):
+                if key in raw:
+                    try: self._limit_raw[key] = None if raw.get(key) is None else int(raw.get(key))
+                    except Exception: self._limit_raw[key] = None
+            for lp,key in ((self.state.near_limit,"nearRamp"),(self.state.far_limit,"farRamp")):
+                r = lim.get(key) if isinstance(lim.get(key), dict) else None
+                if r is None: continue
+                lp.ramp_mode = "Percentage" if str(r.get("mode", lp.ramp_mode)).lower().startswith("percent") else "Distance"
+                try: lp.ramp_distance_m = max(0.0, float(r.get("distance", lp.ramp_distance_m)))
+                except Exception: pass
+                try: lp.ramp_percentage = max(0.0, min(100.0, float(r.get("percentage", lp.ramp_percentage))))
+                except Exception: pass
+
+    def _finish_pending_import_if_handled(self) -> None:
+        if self._pending_import_setup_handled and self._pending_import_freed_handled:
+            self._pending_import_config = None
+
     def _load_config(self):
         try:
             if not self._config_path.exists():
@@ -1605,6 +1765,70 @@ class HVP2PBackend(QObject):
     def ctrlAuxAssignments(self): return list(self.ctrl_aux_assignments)
     @Property('QVariantList', notify=configChanged)
     def w1pAuxAssignments(self): return list(self.w1p_aux_assignments)
+    @Property('QVariantMap', notify=configChanged)
+    def setupDraft(self):
+        snap = copy.deepcopy(getattr(self, "_setup_draft", self._setup_snapshot()))
+        return snap
+
+    @Property('QVariantMap', notify=configChanged)
+    def freeDDraft(self):
+        snap = copy.deepcopy(getattr(self, "_freed_draft", self._freed_snapshot()))
+        snap["skate_weight_value"] = self._kg_to_lb(snap["skate_weight_kg"]) if snap.get("skate_weight_unit") == "lbs" else float(snap["skate_weight_kg"])
+        snap["cable_weight_value"] = self._kg_to_lb(snap["cable_weight_kg100m"]) if snap.get("cable_weight_unit") == "lbs/100m" else float(snap["cable_weight_kg100m"])
+        snap["cable_tension_value"] = self._kg_to_lb(snap["cable_tension_kg"]) if snap.get("cable_tension_unit") == "lbs" else float(snap["cable_tension_kg"])
+        return snap
+
+    def _lens_percent_snapshot(self, field: str, value: float, snap: dict) -> float:
+        field = "zoom" if str(field).lower().startswith("zoom") else "focus"
+        mode = str(snap.get("lens_scale_mode", "Auto"))
+        lens_type = str(snap.get("lens_type", "u16"))
+        if lens_type == "u16": limits = (0.0, 65535.0)
+        elif lens_type == "i16": limits = (-32768.0, 32767.0)
+        elif lens_type == "u24": limits = (0.0, 16777215.0)
+        else: limits = (-8388608.0, 8388607.0)
+        cal = dict(snap.get("lens_cal", {}))
+        seen = dict(snap.get("lens_auto_seen", {}))
+        if mode == "Full Scale":
+            lo, hi = limits
+        elif mode == "Auto":
+            lo, hi = seen.get(field+"_min"), seen.get(field+"_max")
+            if lo is None or hi is None or abs(float(hi)-float(lo)) < 1e-9:
+                lo = float(cal.get("zoom_wide" if field == "zoom" else "focus_near", 0.0))
+                hi = float(cal.get("zoom_tele" if field == "zoom" else "focus_far", 32767.0))
+        else:
+            lo = float(cal.get("zoom_wide" if field == "zoom" else "focus_near", 0.0))
+            hi = float(cal.get("zoom_tele" if field == "zoom" else "focus_far", 32767.0))
+        if abs(float(hi)-float(lo)) < 1e-9: return 0.0
+        return max(0.0, min(100.0, (float(value)-float(lo))*100.0/(float(hi)-float(lo))))
+
+    @Property('QVariantMap', notify=stateChanged)
+    def freeDInputPreview(self):
+        snap = getattr(self, "_freed_draft", self._freed_snapshot())
+        r = self.freed_in_raw
+        pan = float(self.freed_in.get("Pan",0.0))*self._input_sign("Pan", snap.get("input_inverts",{})) + float(snap.get("input_offsets",{}).get("Pan",0.0))
+        tilt = float(self.freed_in.get("Tilt",0.0))*self._input_sign("Tilt", snap.get("input_inverts",{})) + float(snap.get("input_offsets",{}).get("Tilt",0.0))
+        roll = float(self.freed_in.get("Roll",0.0))*self._input_sign("Roll", snap.get("input_inverts",{})) + float(snap.get("input_offsets",{}).get("Roll",0.0))
+        zoom = float(self._decode_lens_for_type(int(r.get("Zoom",0)), snap.get("lens_type","u16")))*self._input_sign("Zoom", snap.get("input_inverts",{}))
+        focus = float(self._decode_lens_for_type(int(r.get("Focus",0)), snap.get("lens_type","u16")))*self._input_sign("Focus", snap.get("input_inverts",{}))
+        return {"cam":int(r.get("Cam ID",1)),"panRaw":int(r.get("Pan",0)),"pan":pan,
+                "tiltRaw":int(r.get("Tilt",0)),"tilt":tilt,"rollRaw":int(r.get("Roll",0)),"roll":roll,
+                "zoomRaw":int(r.get("Zoom",0)),"zoom":zoom,"focusRaw":int(r.get("Focus",0)),"focus":focus,
+                "zoomPct":self._lens_percent_snapshot("zoom",zoom,snap),"focusPct":self._lens_percent_snapshot("focus",focus,snap),
+                "fps":float(self.freed_in_fps)}
+
+    @Property('QVariantMap', notify=stateChanged)
+    def freeDOutputPreview(self):
+        snap = getattr(self, "_freed_draft", self._freed_snapshot())
+        x,y,z = self._xyz(snap)
+        inv = snap.get("output_inverts",{})
+        return {"x":float(x)*self._output_sign("X",inv), "y":float(y)*self._output_sign("Y",inv),
+                "z":float(z)*self._output_sign("Z",inv), "fps":float(self.freed_out_fps),
+                "targetFps":float(snap.get("rate_hz",self.freed_rate_hz))}
+
+    @Property('QVariantList', notify=stateChanged)
+    def freeDPreviewCableProfile(self):
+        return self._cable_profile(getattr(self, "_freed_draft", self._freed_snapshot()))
+
     @Property('QVariantMap', notify=configChanged)
     def calibrationSummary(self):
         def item(lp, raw_key):
@@ -2026,32 +2250,106 @@ class HVP2PBackend(QObject):
 
     @Slot()
     def beginSetupEdit(self):
-        """Capture the current applied Setup values when the operator opens Setup."""
-        self._saved_setup_snapshot = self._setup_snapshot()
+        """Refresh Setup from live values only when there are no unapplied edits."""
+        if self._pending_import_config is not None and not self._pending_import_setup_handled:
+            return
+        if not getattr(self, "_setup_draft_dirty", False):
+            self._saved_setup_snapshot = self._setup_snapshot()
+            self._setup_draft = copy.deepcopy(self._saved_setup_snapshot)
+            self._notify_config()
+
+    @Slot()
+    def beginFreeDEdit(self):
+        """Refresh Free-D from live values only when there are no unapplied edits."""
+        if self._pending_import_config is not None and not self._pending_import_freed_handled:
+            return
+        if not getattr(self, "_freed_draft_dirty", False):
+            self._saved_freed_snapshot = self._freed_snapshot()
+            self._freed_draft = copy.deepcopy(self._saved_freed_snapshot)
+            self._notify_config()
 
     @Slot()
     def applySetupSettings(self):
-        self._save_config()
+        """Atomically commit the Setup draft; no Setup editor writes are live before this."""
+        self._restore_setup_snapshot(copy.deepcopy(self._setup_draft))
+        if self._pending_import_config is not None and not self._pending_import_setup_handled:
+            self._apply_imported_run_config(self._pending_import_config)
+            self._pending_import_setup_handled = True
+        self._save_config(include_staged_freed=False)
         self._saved_setup_snapshot = self._setup_snapshot()
-        self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
-        if not self.smoke_test:
-            self._sync_w1p_settings()
-            self._sync_service_mode_to_winch(force=True)
+        self._setup_draft = copy.deepcopy(self._saved_setup_snapshot)
+        self._setup_draft_dirty = False
+        self._finish_pending_import_if_handled()
         self._log("[Config] Setup settings applied")
         self._notify_config()
 
     @Slot()
     def resetSetupSettings(self):
-        self._restore_setup_snapshot(dict(self._saved_setup_snapshot))
-        self._save_config()
-        self._log("[Config] Setup edits reset")
+        """Discard Setup draft edits and show the last applied/saved values."""
+        # Live Setup state is always the last applied/saved state because staged
+        # Setup editors never write to it. This also picks up legitimate Run-page
+        # changes (for example a Mode name) made since Setup was first opened.
+        self._saved_setup_snapshot = self._setup_snapshot()
+        self._setup_draft = copy.deepcopy(self._saved_setup_snapshot)
+        self._setup_draft_dirty = False
+        if self._pending_import_config is not None and not self._pending_import_setup_handled:
+            self._pending_import_setup_handled = True
+            self._finish_pending_import_if_handled()
+        self._log("[Config] Setup staged edits reset")
         self._notify_config()
 
+    @Slot(str, result=str)
+    def exportConfigFile(self, value):
+        """Export the currently APPLIED full configuration to a transferable JSON file."""
+        try:
+            path = self._dialog_path(value)
+            if not str(path): return ""
+            if path.suffix.lower() != ".json":
+                path = Path(str(path) + ".hvp2p.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._save_config(include_staged_freed=False)
+            payload = json.loads(self._config_path.read_text(encoding="utf-8"))
+            payload["_meta"] = {"format":"HV P2P SRVR Config", "version":self.version}
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._log(f"[Config] exported: {path}")
+            return str(path)
+        except Exception as exc:
+            self._log(f"[Config] export failed: {exc}")
+            return ""
+
+    @Slot(str, result=bool)
+    def stageConfigFile(self, value):
+        """Load a transfer file into Setup/Free-D drafts; Apply buttons remain authoritative."""
+        try:
+            path = self._dialog_path(value)
+            c = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(c, dict):
+                raise ValueError("config root must be an object")
+            self._setup_draft = self._setup_snapshot_from_config(c)
+            self._freed_draft = self._freed_snapshot_from_config(c)
+            self._pending_import_config = copy.deepcopy(c)
+            self._pending_import_setup_handled = False
+            self._pending_import_freed_handled = False
+            self._setup_draft_dirty = True
+            self._freed_draft_dirty = True
+            self._log(f"[Config] loaded into pending Setup/Free-D drafts: {path}")
+            self._notify_config()
+            return True
+        except Exception as exc:
+            self._log(f"[Config] transfer load failed: {exc}")
+            return False
+
+    # Legacy internal save/load slots retained for compatibility. They operate on
+    # the app's private config.json, not the transferable file-picker actions.
     @Slot()
     def saveConfig(self):
-        # The locked ACTIONS button means save the current full configuration.
         self._save_config(include_staged_freed=False)
         self._saved_setup_snapshot = self._setup_snapshot()
+        self._saved_freed_snapshot = self._freed_snapshot()
+        self._setup_draft = copy.deepcopy(self._saved_setup_snapshot)
+        self._freed_draft = copy.deepcopy(self._saved_freed_snapshot)
+        self._setup_draft_dirty = False
+        self._freed_draft_dirty = False
         self._log("[Config] configuration saved")
         self._notify_config()
 
@@ -2060,14 +2358,23 @@ class HVP2PBackend(QObject):
         self._load_config()
         self._saved_setup_snapshot = self._setup_snapshot()
         self._saved_freed_snapshot = self._freed_snapshot()
+        self._setup_draft = copy.deepcopy(self._saved_setup_snapshot)
+        self._freed_draft = copy.deepcopy(self._saved_freed_snapshot)
+        self._pending_import_config = None
+        self._pending_import_setup_handled = True
+        self._pending_import_freed_handled = True
+        self._setup_draft_dirty = False
+        self._freed_draft_dirty = False
         self.w1p.reconfigure(self.w1p_ip, self.w1p_port)
         if not self.smoke_test:
-            self._sync_w1p_settings()
-            self._sync_service_mode_to_winch(force=True)
-            self._start_freed_input()
+            self._sync_w1p_settings(); self._sync_service_mode_to_winch(force=True); self._start_freed_input()
         self._log("[Config] configuration loaded")
         self._notify_config()
 
+    # Legacy live-edit slots retained for compatibility with older internal
+    # callers/tests and external integrations. The locked Setup QML never calls
+    # these: Setup uses the setSetup* draft API so its values remain unapplied
+    # until the operator presses Apply.
     @Slot(float)
     def setJoystickDeadband(self, value):
         self.joystick_deadband_pct = max(0.0, min(25.0, float(value)))
@@ -2075,14 +2382,12 @@ class HVP2PBackend(QObject):
 
     @Slot(str)
     def setPositionSource(self, value):
-        # Only the proven Encoder source is currently implemented.
         self.position_source = "Encoder"
         self._save_config(); self._notify_config()
 
     @Slot(int, str, float)
     def setDriveModeValue(self, index, key, value):
-        i = int(index)
-        key = str(key)
+        i, key = int(index), str(key)
         allowed = {"max_speed_mps", "goto_speed_mps", "accel_mps2", "decel_mps2", "crossover_mps2", "stop_decel_mps2"}
         if i not in (0, 1) or key not in allowed:
             return
@@ -2103,9 +2408,81 @@ class HVP2PBackend(QObject):
             return
         target = self.ctrl_aux_assignments if str(which).upper().startswith("CTRL") else self.w1p_aux_assignments
         target[i] = str(value)
-        # Assignment persistence is intentionally separate from protocol handling:
-        # no unverified AUX hardware command is introduced in this revision.
         self._save_config(); self._notify_config()
+
+    @Slot(str,str)
+    def setSetupNetwork(self, which, value):
+        key = "ctrl_ip" if str(which).upper().startswith("CTRL") else "w1p_ip"
+        self._setup_draft[key] = str(value).strip()
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(str,bool)
+    def setSetupDirection(self, which, inverted):
+        key = "reverse_joystick" if str(which).upper().startswith("CTRL") else "reverse_motor"
+        self._setup_draft[key] = bool(inverted)
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(float)
+    def setSetupUnitsPerM(self, value):
+        self._setup_draft["units_per_m"] = max(1.0, float(value))
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(float)
+    def setSetupJoystickDeadband(self, value):
+        self._setup_draft["joystick_deadband_pct"] = max(0.0, min(25.0, float(value)))
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(str)
+    def setSetupPositionSource(self, value):
+        self._setup_draft["position_source"] = "Encoder"
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(int,str)
+    def renameSetupDriveMode(self, index, name):
+        i = int(index)
+        if i in (0,1):
+            self._setup_draft["drive_modes"][i]["name"] = str(name).strip() or f"Mode {i+1}"
+            self._setup_draft_dirty = True
+            self._notify_config()
+
+    @Slot(int,str,float)
+    def setSetupDriveModeValue(self, index, key, value):
+        i, key = int(index), str(key)
+        allowed = {"max_speed_mps", "goto_speed_mps", "accel_mps2", "decel_mps2", "crossover_mps2", "stop_decel_mps2"}
+        if i not in (0,1) or key not in allowed: return
+        dm = self._setup_draft["drive_modes"][i]
+        v = max(0.01, float(value))
+        dm[key] = v
+        if key == "max_speed_mps": dm["goto_speed_mps"] = min(float(dm["goto_speed_mps"]), v)
+        elif key == "goto_speed_mps": dm[key] = min(v, float(dm["max_speed_mps"]))
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(str)
+    def setSetupAccelerationMode(self, mode):
+        self._setup_draft["acceleration_mode"] = "Power" if str(mode).lower().startswith("power") else "Speed"
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(bool)
+    def setSetupBatteryChange(self, on):
+        self._setup_draft["battery_change_mode"] = bool(on)
+        self._setup_draft_dirty = True
+        self._notify_config()
+
+    @Slot(str,int,str)
+    def setSetupAuxAssignment(self, which, index, value):
+        i = int(index)
+        if not 0 <= i < 5: return
+        key = "ctrl_aux_assignments" if str(which).upper().startswith("CTRL") else "w1p_aux_assignments"
+        self._setup_draft[key][i] = str(value)
+        self._setup_draft_dirty = True
+        self._notify_config()
 
     @Slot()
     def openJoystickCalibration(self):
@@ -2168,120 +2545,135 @@ class HVP2PBackend(QObject):
                 self._log("[Calibration] Joystick calibration rejected: invalid Left/Centre/Right range")
                 self.joystickCalibrationChanged.emit(); self.stateChanged.emit()
                 return
-            self.joystick_cal_left = left
-            self.joystick_cal_centre = centre
-            self.joystick_cal_right = right
             self.joystick_calibration_error = ""
             self.joystick_calibration_open = False
-            self._save_config()
-            self._saved_setup_snapshot = self._setup_snapshot()
-            self._log(f"[Calibration] Joystick calibrated L={left:.4f} C={centre:.4f} R={right:.4f}")
+            # Setup uses explicit Apply/Reset semantics. Completing the wizard
+            # stages the new raw calibration only; the live joystick mapping and
+            # persistent config are unchanged until Setup Apply is pressed.
+            self._setup_draft["joystick_calibration"] = {"left":left, "centre":centre, "right":right}
+            self._setup_draft_dirty = True
+            self._log(f"[Calibration] Joystick calibration staged L={left:.4f} C={centre:.4f} R={right:.4f}; press Apply to commit")
         self.goto_target_m = None
         self._send_velocity(0.0, force=True)
         self.joystickCalibrationChanged.emit(); self.configChanged.emit(); self.stateChanged.emit()
 
     @Slot(str,bool)
     def setFreeDEnabled(self, which, enabled):
-        if str(which).lower().startswith("in"):
-            self.freed_input_enabled = bool(enabled)
-        else:
-            self.freed_output_enabled = bool(enabled)
+        key = "input_enabled" if str(which).lower().startswith("in") else "output_enabled"
+        self._freed_draft[key] = bool(enabled)
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str,str,str)
     def setFreeDNetwork(self, which, field, value):
-        which = str(which).lower()
-        field = str(field).lower()
+        which, field = str(which).lower(), str(field).lower()
         try:
             if which.startswith("in"):
-                if field == "ip": self.freed_input_bind_ip = str(value).strip() or "0.0.0.0"
-                elif field == "port": self.freed_input_port = max(1, min(65535, int(float(value))))
+                if field == "ip": self._freed_draft["input_bind_ip"] = str(value).strip() or "0.0.0.0"
+                elif field == "port": self._freed_draft["input_port"] = max(1, min(65535, int(float(value))))
             else:
-                if field == "ip": self.freed_target_ip = str(value).strip()
-                elif field == "port": self.freed_target_port = max(1, min(65535, int(float(value))))
-                elif field in ("fps","rate"): self.freed_rate_hz = max(1.0, min(100.0, float(value)))
+                if field == "ip": self._freed_draft["target_ip"] = str(value).strip()
+                elif field == "port": self._freed_draft["target_port"] = max(1, min(65535, int(float(value))))
+                elif field in ("fps","rate"): self._freed_draft["rate_hz"] = max(1.0, min(100.0, float(value)))
         except Exception as exc:
-            self._log(f"[Free-D] invalid {which} {field}: {value} ({exc})")
+            self._log(f"[Free-D] invalid staged {which} {field}: {value} ({exc})")
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str,str,float)
     def setFreeDOffset(self, side, axis, value):
-        axis = str(axis).upper() if str(side).lower().startswith("out") else str(axis).title()
-        if str(side).lower().startswith("in") and axis in ("Pan","Tilt","Roll"):
-            self.freed_input_offsets[axis] = float(value)
-        elif axis in ("X","Y","Z"):
-            self.freed_output_offsets[axis] = float(value)
+        if str(side).lower().startswith("in"):
+            axis = str(axis).title()
+            if axis in ("Pan","Tilt","Roll"): self._freed_draft["input_offsets"][axis] = float(value)
+        else:
+            axis = str(axis).upper()
+            if axis in ("X","Y","Z"): self._freed_draft["output_offsets"][axis] = float(value)
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str,str,bool)
     def setFreeDInvert(self, side, axis, enabled):
-        axis = str(axis).upper() if str(side).lower().startswith("out") else str(axis).title()
-        if str(side).lower().startswith("in") and axis in ("Pan","Tilt","Roll","Zoom","Focus"):
-            self.freed_input_inverts[axis] = bool(enabled)
-        elif axis in ("X","Y","Z"):
-            self.freed_output_inverts[axis] = bool(enabled)
+        if str(side).lower().startswith("in"):
+            axis = str(axis).title()
+            if axis in ("Pan","Tilt","Roll","Zoom","Focus"): self._freed_draft["input_inverts"][axis] = bool(enabled)
+        else:
+            axis = str(axis).upper()
+            if axis in ("X","Y","Z"): self._freed_draft["output_inverts"][axis] = bool(enabled)
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(int,str,float)
     def setGeometryPoint(self, index, axis, value):
-        i = int(index); axis = str(axis).lower()
-        if not 0 <= i < 5 or axis not in ("x","y","z"):
-            return
-        if axis == "z" and i not in (0,4):
-            return
-        self.geometry[i][axis] = float(value)
+        i, axis = int(index), str(axis).lower()
+        if not 0 <= i < 5 or axis not in ("x","y","z"): return
+        if axis == "z" and i not in (0,4): return
+        self._freed_draft["geometry"][i][axis] = float(value)
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str,float)
     def setWeightValue(self, which, value):
-        which = str(which).lower(); v = max(0.0, float(value))
+        which, v = str(which).lower(), max(0.0, float(value))
         if which.startswith("skate") or which.startswith("static"):
-            self.skate_weight_kg = self._lb_to_kg(v) if self.skate_weight_unit == "lbs" else v
+            self._freed_draft["skate_weight_kg"] = self._lb_to_kg(v) if self._freed_draft.get("skate_weight_unit") == "lbs" else v
         elif which.startswith("cable"):
-            self.cable_weight_kg100m = self._lb_to_kg(v) if self.cable_weight_unit == "lbs/100m" else v
+            self._freed_draft["cable_weight_kg100m"] = self._lb_to_kg(v) if self._freed_draft.get("cable_weight_unit") == "lbs/100m" else v
         elif which.startswith("tension"):
-            kg = self._lb_to_kg(v) if self.cable_tension_unit == "lbs" else v
-            self.cable_tension_kg = max(0.01, kg)
+            kg = self._lb_to_kg(v) if self._freed_draft.get("cable_tension_unit") == "lbs" else v
+            self._freed_draft["cable_tension_kg"] = max(0.01, kg)
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str,str)
     def setWeightUnit(self, which, unit):
-        which = str(which).lower(); unit = str(unit)
+        which, unit = str(which).lower(), str(unit)
         if which.startswith("skate") or which.startswith("static"):
-            self.skate_weight_unit = "lbs" if unit.lower().startswith("lb") else "kg"
+            self._freed_draft["skate_weight_unit"] = "lbs" if unit.lower().startswith("lb") else "kg"
         elif which.startswith("cable"):
-            self.cable_weight_unit = "lbs/100m" if unit.lower().startswith("lb") else "kg/100m"
+            self._freed_draft["cable_weight_unit"] = "lbs/100m" if unit.lower().startswith("lb") else "kg/100m"
         elif which.startswith("tension"):
-            self.cable_tension_unit = "lbs" if unit.lower().startswith("lb") else "kg"
-        # Canonical kg values are unchanged; only the displayed representation changes.
+            self._freed_draft["cable_tension_unit"] = "lbs" if unit.lower().startswith("lb") else "kg"
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str)
     def setHighlineMode(self, mode):
-        self.highline_mode = "Dual Highline" if str(mode).lower().startswith("dual") else "Single Highline"
+        self._freed_draft["highline_mode"] = "Dual Highline" if str(mode).lower().startswith("dual") else "Single Highline"
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str,float)
     def setLensCalibration(self, which, value):
         key = str(which)
-        if key in self.freed_lens_cal:
-            self.freed_lens_cal[key] = float(value)
+        if key in self._freed_draft["lens_cal"]:
+            self._freed_draft["lens_cal"][key] = float(value)
+            self._freed_draft_dirty = True
             self._notify_config()
 
     @Slot()
     def applyFreeDSettings(self):
-        """Commit the staged Free-D page and restart the input listener if needed."""
+        """Atomically commit the Free-D draft and restart the input listener."""
+        self._restore_freed_snapshot(copy.deepcopy(self._freed_draft))
         self._save_config(include_staged_freed=True)
         self._saved_freed_snapshot = self._freed_snapshot()
-        if not self.smoke_test:
-            self._start_freed_input()
+        self._freed_draft = copy.deepcopy(self._saved_freed_snapshot)
+        self._freed_draft_dirty = False
+        if self._pending_import_config is not None and not self._pending_import_freed_handled:
+            self._pending_import_freed_handled = True
+            self._finish_pending_import_if_handled()
+        if not self.smoke_test: self._start_freed_input()
         self._log("[Free-D] settings applied")
         self._notify_config()
 
     @Slot()
     def resetFreeDSettings(self):
-        """Discard un-applied Free-D edits and restore the last applied/saved values."""
-        self._restore_freed_snapshot(dict(self._saved_freed_snapshot))
+        """Discard Free-D draft edits and show the last applied/saved values."""
+        self._saved_freed_snapshot = self._freed_snapshot()
+        self._freed_draft = copy.deepcopy(self._saved_freed_snapshot)
+        self._freed_draft_dirty = False
+        if self._pending_import_config is not None and not self._pending_import_freed_handled:
+            self._pending_import_freed_handled = True
+            self._finish_pending_import_if_handled()
         self._log("[Free-D] staged edits reset")
         self._notify_config()
 
@@ -2311,19 +2703,22 @@ class HVP2PBackend(QObject):
     def setLensType(self,t):
         t = str(t)
         if t in ("i16","u16","i24","u24"):
-            self.freed_lens_type = t
+            self._freed_draft["lens_type"] = t
+            self._freed_draft_dirty = True
             self._notify_config()
 
     @Slot(str)
     def setLensScale(self,s):
-        self.freed_lens_scale_mode = self._normalise_lens_scale(s)
+        self._freed_draft["lens_scale_mode"] = self._normalise_lens_scale(s)
+        self._freed_draft_dirty = True
         self._notify_config()
 
     @Slot(str,float)
     def captureLens(self,which,value):
         key = str(which)
-        if key in self.freed_lens_cal:
-            self.freed_lens_cal[key] = float(value)
+        if key in self._freed_draft["lens_cal"]:
+            self._freed_draft["lens_cal"][key] = float(value)
+            self._freed_draft_dirty = True
             self._notify_config()
 
     @Slot()

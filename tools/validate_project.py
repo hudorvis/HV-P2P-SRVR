@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.13"
+VERSION = "26.08.17.14"
 ERRORS: list[str] = []
 
 
@@ -197,8 +197,9 @@ require('property int pi:index+(window.shortcutTab' not in qml_main,
         "preset delegate index still changes when switching Shortcuts tabs")
 require('property int pi:index' in qml_main and 'property int pi:index+5' in qml_main,
         "Preset 1-5 and Preset 6-10 do not have fixed delegate indices")
-require(qml_main.count('cableProfile:backend.cableProfile') >= 4,
-        "Run and Free-D are not all using the same calculated cable profile")
+require(qml_main.count('cableProfile:backend.cableProfile') >= 2 and
+        qml_main.count('cableProfile:backend.freeDPreviewCableProfile') >= 2,
+        "Run live and Free-D staged-preview diagrams are not both using the canonical cable profile path")
 require(qml_main.count('showGeometryPoints:true') >= 2 and qml_main.count('showPresets:true') >= 2,
         "Run/Free-D marker overlays are not separated correctly")
 require('property var cableProfile' in span_qml and 'Canonical calculated cable line' in span_qml,
@@ -352,6 +353,83 @@ require('abs(lspan) < 0.05' in backend and 'lspan*rspan >= 0.0' in backend,
 require('self._sync_service_mode_to_winch(force=True)' in backend[backend.find('def openJoystickCalibration'):backend.find('def cancelJoystickCalibration')],
         "joystick wizard does not close an inherited service-calibration state safely")
 
+# v14 requested maintenance contract: AUX Preset Save choices, transferable
+# config file dialogs, strict Setup/Free-D draft semantics, and the Setup
+# Motion Profiles divider containment fix. Everything else remains locked.
+require('import QtQuick.Dialogs' in qml_setup,
+        "Setup does not import QtQuick.Dialogs for transferable config files")
+require('fileMode: FileDialog.SaveFile' in qml_setup and 'fileMode: FileDialog.OpenFile' in qml_setup,
+        "Setup Save/Load Config native file dialogs are missing")
+require('backend.exportConfigFile(selectedFile.toString())' in qml_setup and
+        'backend.stageConfigFile(selectedFile.toString())' in qml_setup,
+        "Setup Save/Load Config file dialogs are not wired to the backend")
+for i in range(1, 11):
+    require(f'"Preset {i} Save"' in qml_setup, f"AUX assignment option missing: Preset {i} Save")
+require('property var auxChoices:' in qml_setup and
+        'backend.setSetupAuxAssignment("CTRL",index,currentText)' in qml_setup and
+        'backend.setSetupAuxAssignment("W1P",index,currentText)' in qml_setup,
+        "both AUX assignment panels are not using the shared staged choice list")
+
+# Setup must bind/edit the draft only. Live telemetry/status indicators are
+# allowed, but editable Setup controls may not call the old immediate-save API.
+require('backend.setupDraft' in qml_setup and qml_setup.count('backend.setupDraft') >= 12,
+        "Setup editable controls are not consistently bound to setupDraft")
+for forbidden in ('backend.renameDriveMode(', 'backend.setDriveModeValue(',
+                  'backend.setJoystickDeadband(', 'backend.setAuxAssignment('):
+    require(forbidden not in qml_setup, f"Setup contains immediate live-write binding: {forbidden}")
+for required in ('backend.renameSetupDriveMode(', 'backend.setSetupDriveModeValue(',
+                 'backend.setSetupJoystickDeadband(', 'backend.setSetupAuxAssignment(',
+                 'backend.setSetupNetwork(', 'backend.setSetupDirection(',
+                 'backend.setSetupUnitsPerM(', 'backend.setSetupAccelerationMode(',
+                 'backend.setSetupBatteryChange('):
+    require(required in qml_setup, f"Setup staged editor binding missing: {required}")
+require('self._setup_draft_dirty = True' in backend and
+        'self._restore_setup_snapshot(copy.deepcopy(self._setup_draft))' in backend and
+        'def resetSetupSettings' in backend,
+        "Setup draft Apply/Reset backend is incomplete")
+require('if not getattr(self, "_setup_draft_dirty", False):' in backend,
+        "Setup page navigation can discard unapplied staged edits")
+
+# Free-D controls likewise bind to freeDDraft and only commit through Apply.
+require('property var fdDraft: backend.freeDDraft' in qml_main,
+        "Free-D page is not bound to freeDDraft")
+require('self._freed_draft_dirty = True' in backend and
+        'self._restore_freed_snapshot(copy.deepcopy(self._freed_draft))' in backend and
+        'if not getattr(self, "_freed_draft_dirty", False):' in backend,
+        "Free-D draft Apply/Reset/navigation backend is incomplete")
+require('backend.freeDPreviewCableProfile' in qml_main and
+        'backend.freeDInputPreview' in qml_main and 'backend.freeDOutputPreview' in qml_main,
+        "Free-D staged visual preview path is incomplete")
+require('def exportConfigFile' in backend and 'def stageConfigFile' in backend and
+        'self._pending_import_config' in backend and '_apply_imported_run_config' in backend,
+        "transferable configuration import/export backend is incomplete")
+require('currently APPLIED full configuration' in backend and
+        'Load a transfer file into Setup/Free-D drafts' in backend,
+        "config transfer does not document applied-export/staged-import semantics")
+
+# The joystick wizard is a Setup setting: completion must stage calibration and
+# Apply is the only path that commits it to the live calibrated axis/config.
+joy_start = backend.find('def joystickCalibrationNext')
+joy_end = backend.find('@Slot(str,bool)', joy_start)
+joy_src = backend[joy_start:joy_end if joy_end > joy_start else None]
+require('self._setup_draft["joystick_calibration"]' in joy_src and
+        'self._setup_draft_dirty = True' in joy_src,
+        "Joystick wizard completion is not staged in Setup")
+require('self._save_config' not in joy_src,
+        "Joystick wizard bypasses Setup Apply by saving immediately")
+
+# Motion Profiles row must contain both six-row mode tables before the divider;
+# this is the screenshot-derived Stop Deceleration/divider overlap fix.
+require('width:parent.width; height:root.f(250)' in qml_setup and
+        qml_setup.count('spacing:root.f(2)') >= 2,
+        "Setup Motion Profiles divider containment fix is missing")
+
+# The v13 live API remains available for compatibility, but Setup.qml is not
+# permitted to call it. This protects existing backend integrations while
+# preserving the new operator-facing Apply contract.
+for token in ('def setJoystickDeadband', 'def setPositionSource', 'def setDriveModeValue', 'def setAuxAssignment'):
+    require(token in backend, f"legacy backend compatibility slot missing: {token}")
+
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.
 for token in (
@@ -401,8 +479,8 @@ require('QT_QPA_PLATFORM=cocoa "$ROUNDTRIP_EXE" --smoke-test' in workflow,
 
 require('text: "Skate Weight:"' in qml_main, "Free-D must label the suspended package as Skate Weight")
 require('text: "Static Weight:"' not in qml_main, "obsolete Static Weight label remains in Free-D")
-require('backend.skateWeightValue' in qml_main and 'setWeightValue("Skate", n)' in qml_main,
-        "Skate Weight editor is not wired to the backend")
+require('freeDPage.fdDraft.skate_weight_value' in qml_main and 'setWeightValue("Skate", n)' in qml_main,
+        "staged Skate Weight editor is not wired to the Free-D draft backend")
 require('Text { width:f(150); anchors.verticalCenter:parent.verticalCenter; text:"Drive Mode"' in qml_main,
         "System Drive Mode row is not aligned to the common 150px control column")
 require('fillText("SKATE"' not in span_qml, "Top/Side span diagrams still draw the SKATE text label")

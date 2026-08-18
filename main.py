@@ -31,7 +31,7 @@ import PySide6.QtQuickControls2  # noqa: F401
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.13"
+APP_VERSION = "26.08.17.14"
 
 
 def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: HVP2PBackend) -> bool:
@@ -73,14 +73,18 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         backend._ctrl_axis = 0.08
         backend.joystickCalibrationNext()
         app.processEvents()
+        old_cal = (backend.joystick_cal_left, backend.joystick_cal_centre, backend.joystick_cal_right)
         backend._ctrl_axis = 0.91
         backend.joystickCalibrationNext()
         app.processEvents()
         if backend.joystickCalibrationOpen:
             raise RuntimeError("Joystick Calibration wizard did not complete")
+        if (backend.joystick_cal_left, backend.joystick_cal_centre, backend.joystick_cal_right) != old_cal:
+            raise RuntimeError("Joystick calibration changed live before Setup Apply")
+        backend.applySetupSettings()
         backend._ctrl_axis = 0.08
         if abs(float(backend.joystickValue)) > 1e-6:
-            raise RuntimeError("Joystick calibrated centre is not zero")
+            raise RuntimeError("Applied joystick calibrated centre is not zero")
 
         # Exercise the editable Run/System controls that previously appeared
         # visually correct but behaved read-only in the first Qt test builds.
@@ -101,26 +105,38 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         if abs(float(backend.nearRampValue) - 20.0) > 1e-6:
             raise RuntimeError("ramp Percentage->Distance conversion failed")
 
-        # Exercise the final Setup page data path. Mode names/profile values are
-        # deliberately shared with the Run page rather than duplicated state.
+        # Exercise the final Setup page data path. Setup is a true draft: edits
+        # must not affect the live Run/motion state until Apply is pressed.
         backend.beginSetupEdit()
         old_ctrl_ip = backend.ctrlIp
-        backend.setNetwork("CTRL", "172.20.1.199")
-        backend.setJoystickDeadband(4.5)
-        backend.renameDriveMode(0, "Shared Smoke Mode")
-        backend.setDriveModeValue(0, "max_speed_mps", 20.0)
-        backend.setAuxAssignment("CTRL", 0, "Drive Mode")
-        if backend.driveMode1Name != backend.driveModes[0]["name"]:
-            raise RuntimeError("Setup/Run Mode 1 name is not shared")
-        if abs(float(backend.driveModes[0]["max_speed_mps"]) - 20.0) > 1e-6:
-            raise RuntimeError("Setup motion-profile value did not update shared drive mode")
+        old_mode_name = backend.driveMode1Name
+        old_deadband = backend.joystickDeadband
+        backend.setSetupNetwork("CTRL", "172.20.1.199")
+        backend.setSetupJoystickDeadband(4.5)
+        backend.renameSetupDriveMode(0, "Shared Smoke Mode")
+        backend.setSetupDriveModeValue(0, "max_speed_mps", 20.0)
+        backend.setSetupAuxAssignment("CTRL", 0, "Preset 1 Save")
+        backend.setSetupAuxAssignment("W1P", 4, "Preset 10 Save")
+        if backend.ctrlIp != old_ctrl_ip or backend.driveMode1Name != old_mode_name:
+            raise RuntimeError("Setup draft leaked into live Run/network state before Apply")
+        if abs(float(backend.joystickDeadband) - old_deadband) > 1e-6:
+            raise RuntimeError("Setup deadband changed live before Apply")
+        if backend.setupDraft["drive_modes"][0]["name"] != "Shared Smoke Mode":
+            raise RuntimeError("Setup draft drive-mode edit failed")
+        if backend.setupDraft["ctrl_aux_assignments"][0] != "Preset 1 Save" or backend.setupDraft["w1p_aux_assignments"][4] != "Preset 10 Save":
+            raise RuntimeError("Setup AUX Preset Save options failed")
+        # A page navigation refresh must preserve unapplied staged edits.
+        backend.beginSetupEdit()
+        if backend.setupDraft["drive_modes"][0]["name"] != "Shared Smoke Mode":
+            raise RuntimeError("Setup draft was discarded by page navigation")
         backend.resetSetupSettings()
-        if backend.ctrlIp != old_ctrl_ip:
+        if backend.ctrlIp != old_ctrl_ip or backend.setupDraft["drive_modes"][0]["name"] != old_mode_name:
             raise RuntimeError("Setup Reset failed")
         backend.beginSetupEdit()
-        backend.setJoystickDeadband(4.0)
+        backend.setSetupJoystickDeadband(4.0)
+        backend.renameSetupDriveMode(0, "Applied Shared Mode")
         backend.applySetupSettings()
-        if abs(float(backend.joystickDeadband) - 4.0) > 1e-6:
+        if abs(float(backend.joystickDeadband) - 4.0) > 1e-6 or backend.driveMode1Name != "Applied Shared Mode":
             raise RuntimeError("Setup Apply failed")
 
         # Exercise the structured Log page model without changing legacy text export.
@@ -131,7 +147,10 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         if not backend.filteredLogEntries("Free-D", "All", "packet"):
             raise RuntimeError("Log Free-D filter failed")
 
-        # Exercise staged Free-D editing plus Apply/Reset.
+        # Exercise staged Free-D editing plus Apply/Reset. No editable Free-D
+        # value may alter the live output/network state before Apply.
+        backend.beginFreeDEdit()
+        old_fd_ip = backend.freeDOutputIp
         backend.setFreeDNetwork("Output", "IP", "172.20.1.30")
         backend.setFreeDNetwork("Output", "Port", "5002")
         backend.setFreeDNetwork("Output", "FPS", "50")
@@ -142,19 +161,28 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         backend.setWeightUnit("Skate", "lbs")
         backend.setLensType("u16")
         backend.setLensScale("Auto")
+        if backend.freeDOutputIp != old_fd_ip:
+            raise RuntimeError("Free-D draft changed live output before Apply")
+        backend.beginFreeDEdit()
+        if backend.freeDDraft["target_ip"] != "172.20.1.30":
+            raise RuntimeError("Free-D draft was discarded by page navigation")
         backend.applyFreeDSettings()
         backend.setFreeDNetwork("Output", "IP", "10.0.0.99")
         backend.resetFreeDSettings()
-        if backend.freeDOutputIp != "172.20.1.30":
+        if backend.freeDOutputIp != "172.20.1.30" or backend.freeDDraft["target_ip"] != "172.20.1.30":
             raise RuntimeError("Free-D Apply/Reset failed")
 
         # The shared Run/Free-D cable profile must react to tension changes.
         backend.state.near_limit.position_m = 0.0
         backend.state.far_limit.position_m = 100.0
         backend.state.pos_m = 50.0
-        for idx, x in enumerate((0.0, 25.0, 50.0, 75.0, 100.0)):
-            backend.setGeometryPoint(idx, "x", x)
-            backend.setGeometryPoint(idx, "y", 0.0)
+        backend.geometry = [
+            {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
+            {"name":"P2","x":25.0,"y":0.0,"z":None},
+            {"name":"P3","x":50.0,"y":0.0,"z":None},
+            {"name":"P4","x":75.0,"y":0.0,"z":None},
+            {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
+        ]
         backend.skate_weight_kg = 0.0
         backend.cable_weight_kg100m = 4.5
         backend.cable_tension_kg = 50.0

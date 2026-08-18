@@ -29,7 +29,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.13", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.14", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -109,26 +109,52 @@ try:
     assert abs(b.unitsPerM - 22000.5) < 1e-9
     assert b.accelerationMode == "Power" and b.activeDriveMode == 1
 
-    # Final Setup page shares the exact same drive-mode objects used by Run.
+    # Setup is now a true draft. Editing it must not change the live values used
+    # by Run, motion, networking or saved config until Apply is pressed.
     b.beginSetupEdit()
     original_ctrl_ip = b.ctrlIp
     original_mode_1 = b.driveMode1Name
-    b.setNetwork("CTRL", "172.20.1.210")
-    b.setJoystickDeadband(3.5)
-    b.setDriveModeValue(0, "max_speed_mps", 18.0)
-    b.setDriveModeValue(0, "goto_speed_mps", 7.0)
-    b.renameDriveMode(0, "Shared Mode")
-    b.setAuxAssignment("CTRL", 0, "Drive Mode")
-    assert b.driveModes[0]["name"] == b.driveMode1Name == "Shared Mode"
-    assert abs(float(b.driveModes[0]["max_speed_mps"]) - 18.0) < 1e-9
-    assert abs(float(b.joystickDeadband) - 3.5) < 1e-9
-    assert b.ctrlAuxAssignments[0] == "Drive Mode"
-    b.resetSetupSettings()
-    assert b.ctrlIp == original_ctrl_ip and b.driveMode1Name == original_mode_1
+    original_deadband = b.joystickDeadband
+    original_ctrl_aux0 = b.ctrlAuxAssignments[0]
+    original_w1p_aux4 = b.w1pAuxAssignments[4]
+    b.setSetupNetwork("CTRL", "172.20.1.210")
+    b.setSetupJoystickDeadband(3.5)
+    b.setSetupDriveModeValue(0, "max_speed_mps", 18.0)
+    b.setSetupDriveModeValue(0, "goto_speed_mps", 7.0)
+    b.renameSetupDriveMode(0, "Shared Mode")
+    b.setSetupAuxAssignment("CTRL", 0, "Preset 1 Save")
+    b.setSetupAuxAssignment("W1P", 4, "Preset 10 Save")
+    assert b.ctrlIp == original_ctrl_ip
+    assert b.driveMode1Name == original_mode_1
+    assert abs(float(b.joystickDeadband) - original_deadband) < 1e-9
+    assert b.setupDraft["ctrl_ip"] == "172.20.1.210"
+    assert b.setupDraft["drive_modes"][0]["name"] == "Shared Mode"
+    assert abs(float(b.setupDraft["drive_modes"][0]["max_speed_mps"]) - 18.0) < 1e-9
+    assert b.setupDraft["ctrl_aux_assignments"][0] == "Preset 1 Save"
+    assert b.setupDraft["w1p_aux_assignments"][4] == "Preset 10 Save"
+    assert b.ctrlAuxAssignments[0] == original_ctrl_aux0 and b.w1pAuxAssignments[4] == original_w1p_aux4
+    # Re-entering Setup (page navigation) must preserve unapplied edits.
     b.beginSetupEdit()
-    b.setJoystickDeadband(4.0)
+    assert b.setupDraft["drive_modes"][0]["name"] == "Shared Mode"
+    b.resetSetupSettings()
+    assert b.setupDraft["ctrl_ip"] == original_ctrl_ip
+    assert b.setupDraft["drive_modes"][0]["name"] == original_mode_1
+    b.beginSetupEdit()
+    b.setSetupJoystickDeadband(4.0)
+    b.renameSetupDriveMode(0, "Applied Shared Mode")
+    b.setSetupAuxAssignment("CTRL", 0, "Preset 1 Save")
+    b.setSetupAuxAssignment("W1P", 4, "Preset 10 Save")
     b.applySetupSettings()
     assert abs(float(b.joystickDeadband) - 4.0) < 1e-9
+    assert b.driveMode1Name == "Applied Shared Mode" == b.driveModes[0]["name"]
+    assert b.ctrlAuxAssignments[0] == "Preset 1 Save" and b.w1pAuxAssignments[4] == "Preset 10 Save"
+    # Run has immediate-save semantics. A later Setup Reset must use that latest
+    # live/saved value rather than an older Setup snapshot.
+    b.renameDriveMode(0, "Run Saved Mode")
+    b.beginSetupEdit()
+    b.renameSetupDriveMode(0, "Unapplied Setup Mode")
+    b.resetSetupSettings()
+    assert b.setupDraft["drive_modes"][0]["name"] == "Run Saved Mode"
 
     # Joystick Calibration is a real three-step Left/Centre/Right wizard. Moving
     # the stick while it is open must never generate motion, and the captured
@@ -154,8 +180,16 @@ try:
     # Reject an endpoint too close to Centre, then accept a proper Right point.
     b._ctrl_axis = 0.10; b.joystickCalibrationNext()
     assert b.joystickCalibrationOpen and b.joystickCalibrationError
+    live_cal_before = (b.joystick_cal_left, b.joystick_cal_centre, b.joystick_cal_right)
+    saved_before = json.loads(b._config_path.read_text())["joystick_calibration"]
     b._ctrl_axis = 0.91; b.joystickCalibrationNext()
     assert not b.joystickCalibrationOpen and not b.joystickCalibrationError
+    # Wizard completion is staged like every other Setup setting.
+    assert (b.joystick_cal_left, b.joystick_cal_centre, b.joystick_cal_right) == live_cal_before
+    assert b.setupDraft["joystick_calibration"] == {"left":-0.82, "centre":0.08, "right":0.91}
+    saved_mid = json.loads(b._config_path.read_text())["joystick_calibration"]
+    assert saved_mid == saved_before
+    b.applySetupSettings()
     assert abs(b._calibrated_joystick(-0.82) + 1.0) < 1e-9
     assert abs(b._calibrated_joystick(0.08)) < 1e-9
     assert abs(b._calibrated_joystick(0.91) - 1.0) < 1e-9
@@ -163,6 +197,10 @@ try:
     assert abs(float(saved["left"]) + 0.82) < 1e-9
     assert abs(float(saved["centre"]) - 0.08) < 1e-9
     assert abs(float(saved["right"]) - 0.91) < 1e-9
+    # Setup Apply deliberately reinitialises controller link state. Simulate the
+    # next normal CTRL/W1P heartbeat before testing the neutral-return release.
+    now = time.time(); b._ctrl_rx_times.clear(); b._ctrl_rx_times.extend([now - 0.05, now])
+    b.w1p.last_seen = now; b.winch_rs_status = "Connected"; b._ctrl_flags = 0
 
     # Completing at full Right must not turn into an immediate live motion command.
     assert b._joystick_neutral_required
@@ -250,15 +288,19 @@ try:
     assert b.state.near_limit.ramp_mode == "Distance"
     assert abs(b.nearRampValue - 35.0) < 1e-9
 
-    # Free-D staged page editing: unit changes convert display only, editable
-    # values are interpreted in the selected unit, and Reset restores Apply.
+    # Free-D is also a true draft. Display-unit conversion and preview changes
+    # happen in the draft only; the applied Free-D state remains unchanged.
     b.skate_weight_kg = 25.0
+    b.beginFreeDEdit()
+    applied_input_port = b.freeDInputPort
+    applied_highline = b.highlineMode
     b.setWeightUnit("Skate", "lbs")
-    assert abs(b.skateWeightValue - 55.1155655) < 1e-4
+    assert abs(float(b.freeDDraft["skate_weight_value"]) - 55.1155655) < 1e-4
     b.setWeightValue("Skate", 44.0924524)
-    assert abs(b.skate_weight_kg - 20.0) < 1e-4
+    assert abs(b.skate_weight_kg - 25.0) < 1e-9
+    assert abs(float(b.freeDDraft["skate_weight_kg"]) - 20.0) < 1e-4
     b.setWeightUnit("Skate", "kg")
-    assert abs(b.skateWeightValue - 20.0) < 1e-4
+    assert abs(float(b.freeDDraft["skate_weight_value"]) - 20.0) < 1e-4
 
     b.setFreeDEnabled("Input", True)
     b.setFreeDEnabled("Output", True)
@@ -271,10 +313,14 @@ try:
     b.setWeightUnit("Tension", "lbs")
     b.setWeightValue("Tension", b._kg_to_lb(100.0))
     b.setWeightUnit("Tension", "kg")
-    assert b.freeDInputEnabled is True and b.freeDOutputEnabled is True
-    assert b.freeDInputPort == 5001 and b.highlineMode == "Dual Highline"
-    assert abs(b.cableWeightValue - 4.5) < 1e-4
-    assert abs(b.cableTensionValue - 100.0) < 1e-4
+    assert b.freeDInputPort == applied_input_port and b.highlineMode == applied_highline
+    assert b.freeDDraft["input_port"] == 5001 and b.freeDDraft["highline_mode"] == "Dual Highline"
+    assert abs(float(b.freeDDraft["cable_weight_value"]) - 4.5) < 1e-4
+    assert abs(float(b.freeDDraft["cable_tension_value"]) - 100.0) < 1e-4
+    staged_highline = b.freeDDraft["highline_mode"]
+    b.beginFreeDEdit()
+    assert b.freeDDraft["highline_mode"] == staged_highline, "Free-D draft was lost on page navigation"
+    b.resetFreeDSettings()
 
     # The operator banner rolls all lower-level faults up to CTRL/W1P names.
     # Connection loss to both must read exactly CTRL & W1P (no RS485/ADS text).
@@ -304,9 +350,15 @@ try:
     b.state.near_limit.position_m = 0.0
     b.state.far_limit.position_m = 100.0
     b.state.pos_m = 50.0
-    for idx, x in enumerate((0.0,25.0,50.0,75.0,100.0)):
-        b.setGeometryPoint(idx, "x", x)
-        b.setGeometryPoint(idx, "y", 0.0)
+    # This block tests the applied physical model itself, so set the live
+    # geometry directly. setGeometryPoint() is intentionally draft-only in v14.
+    b.geometry = [
+        {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
+        {"name":"P2","x":25.0,"y":0.0,"z":None},
+        {"name":"P3","x":50.0,"y":0.0,"z":None},
+        {"name":"P4","x":75.0,"y":0.0,"z":None},
+        {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
+    ]
     b.cable_weight_kg100m = 0.0
     b.cable_tension_kg = 100.0
     b.skate_weight_kg = 20.0
@@ -390,6 +442,9 @@ try:
     b.skate_weight_kg = 20.0
     b.highline_mode = "Dual Highline"
 
+    b.beginFreeDEdit()
+    previous_output_ip = b.freeDOutputIp
+    previous_skate_kg = b.skate_weight_kg
     b.setFreeDNetwork("Output", "IP", "172.20.1.30")
     b.setFreeDNetwork("Output", "Port", "5002")
     b.setFreeDNetwork("Output", "FPS", "50")
@@ -399,13 +454,17 @@ try:
     b.setFreeDInvert("Input", "Zoom", True)
     b.setGeometryPoint(1, "x", 26.0)
     b.setGeometryPoint(1, "y", 6.0)
-    old_p2_z = b.geometry[1]["z"]
+    old_p2_z = b.freeDDraft["geometry"][1]["z"]
     b.setGeometryPoint(1, "z", 99.0)
-    assert b.geometry[1]["z"] == old_p2_z is None, "P2 Z must remain disabled"
+    assert b.freeDDraft["geometry"][1]["z"] == old_p2_z is None, "P2 Z must remain disabled"
     b.setLensType("i24")
     b.setLensScale("Manual")
     b.setLensCalibration("zoom_wide", -100.0)
     b.captureLens("zoom_tele", 1000.0)
+    # Nothing above is live before Apply.
+    assert b.freeDOutputIp == previous_output_ip
+    assert abs(b.skate_weight_kg - previous_skate_kg) < 1e-9
+    assert b.freeDDraft["target_ip"] == "172.20.1.30"
     b.applyFreeDSettings()
     assert b.freeDOutputIp == "172.20.1.30" and b.freeDOutputPort == 5002
     assert abs(b.freeDOutputRate - 50.0) < 1e-9
@@ -419,13 +478,46 @@ try:
     b.setWeightValue("Skate", 99.0)
     # An unrelated config save must not accidentally commit staged Free-D edits.
     b.setPresetName(1, "Unrelated Save")
-    import json
     saved = json.loads(b._config_path.read_text())
     assert saved["free_d"]["target_ip"] == "172.20.1.30"
-    assert abs(float(saved["free_d"]["skate_weight_kg"]) - 20.0) < 1e-4
+    assert abs(float(saved["free_d"]["skate_weight_kg"]) - float(b.skate_weight_kg)) < 1e-4
     b.resetFreeDSettings()
-    assert b.freeDOutputIp == "172.20.1.30", "Free-D Reset did not restore last Apply"
-    assert abs(b.skateWeightValue - 20.0) < 1e-4
+    assert b.freeDOutputIp == "172.20.1.30", "Free-D Reset changed applied state"
+    assert b.freeDDraft["target_ip"] == "172.20.1.30", "Free-D Reset did not restore last Apply"
+
+    # Transferable Save/Load Config uses an external JSON file. Loading is staged:
+    # Setup Apply commits Setup + Run-only values, while Free-D remains pending
+    # until its own Apply is pressed.
+    transfer_dir = Path(TMP_HOME.name) / "transfer"
+    transfer_dir.mkdir(parents=True, exist_ok=True)
+    applied_export_mode = b.driveMode1Name
+    applied_export_fd_ip = b.freeDOutputIp
+    b.beginSetupEdit(); b.renameSetupDriveMode(0, "UNAPPLIED EXPORT MODE")
+    b.beginFreeDEdit(); b.setFreeDNetwork("Output", "IP", "10.9.8.7")
+    exported = b.exportConfigFile((transfer_dir / "camera_A").as_uri())
+    assert exported.endswith(".hvp2p.json") and Path(exported).is_file()
+    transfer = json.loads(Path(exported).read_text())
+    assert transfer["drive_modes"][0]["name"] == applied_export_mode, "Save Config exported unapplied Setup draft"
+    assert transfer["free_d"]["target_ip"] == applied_export_fd_ip, "Save Config exported unapplied Free-D draft"
+    b.resetSetupSettings(); b.resetFreeDSettings()
+    transfer["ctrl_ip"] = "172.20.1.222"
+    transfer["drive_modes"][0]["name"] = "Imported Mode"
+    transfer["preset_names"][0] = "Imported Preset"
+    transfer["free_d"]["target_ip"] = "172.20.1.77"
+    import_path = transfer_dir / "imported.hvp2p.json"
+    import_path.write_text(json.dumps(transfer, indent=2))
+    old_live_ctrl = b.ctrlIp
+    old_live_fd_ip = b.freeDOutputIp
+    assert b.stageConfigFile(import_path.as_uri())
+    assert b.ctrlIp == old_live_ctrl and b.freeDOutputIp == old_live_fd_ip
+    assert b.setupDraft["ctrl_ip"] == "172.20.1.222"
+    assert b.freeDDraft["target_ip"] == "172.20.1.77"
+    b.applySetupSettings()
+    assert b.ctrlIp == "172.20.1.222" and b.driveMode1Name == "Imported Mode"
+    assert b.preset_names[0] == "Imported Preset"
+    assert b.freeDOutputIp == old_live_fd_ip, "Setup Apply prematurely applied imported Free-D settings"
+    b.applyFreeDSettings()
+    assert b.freeDOutputIp == "172.20.1.77"
 
     # SRVR status banner E-stop toggles only the software latch and leaves
     # other safety sources to the normal safety aggregation.
