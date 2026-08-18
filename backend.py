@@ -136,7 +136,7 @@ class HVP2PBackend(QObject):
     calibrationChanged = Signal()
     joystickCalibrationChanged = Signal()
 
-    def __init__(self, version="26.08.17.14", smoke_test: bool = False):
+    def __init__(self, version="26.08.17.15", smoke_test: bool = False):
         super().__init__()
         self.version = version
         self.smoke_test = bool(smoke_test)
@@ -237,11 +237,11 @@ class HVP2PBackend(QObject):
         self.freed_lens_cal = {"zoom_wide":0.0,"zoom_tele":32767.0,"focus_near":0.0,"focus_far":32767.0}
         self._freed_lens_auto_seen = {"zoom_min":None,"zoom_max":None,"focus_min":None,"focus_max":None}
         self.geometry = [
-            {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
+            {"name":"P1","x":0.0,"y":0.0,"z":0.0},
             {"name":"P2","x":25.0,"y":5.0,"z":None},
             {"name":"P3","x":50.0,"y":8.0,"z":None},
             {"name":"P4","x":75.0,"y":5.0,"z":None},
-            {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
+            {"name":"P5","x":100.0,"y":0.0,"z":0.0},
         ]
         self.skate_weight_kg = 25.0
         self.cable_weight_kg100m = 4.5
@@ -847,9 +847,12 @@ class HVP2PBackend(QObject):
     def _smooth_geometry_y(cls, x, geometry):
         """Smooth C1 reference-height interpolation through P1..P5.
 
-        The geometry points are operator-entered reference heights, not straight
-        cable segments.  A cubic Hermite interpolation creates a smooth reference
-        profile, then the physical whole-span sag model is applied separately.
+        The geometry points are operator-entered reference heights at arbitrary
+        X positions within the Near/Far cable span.  P1 and P5 are therefore not
+        cable supports. A cubic Hermite interpolation creates a smooth reference
+        profile between points, and the endpoint tangents are extended to the
+        actual Near/Far supports when the first/last geometry point is inboard.
+        The physical whole-span sag model is applied separately afterwards.
         """
         pts = cls._normalised_geometry(geometry)
         if not pts:
@@ -857,10 +860,6 @@ class HVP2PBackend(QObject):
         if len(pts) == 1:
             return float(pts[0]["y"])
         xv = float(x)
-        if xv <= pts[0]["x"]:
-            return float(pts[0]["y"])
-        if xv >= pts[-1]["x"]:
-            return float(pts[-1]["y"])
 
         # Finite-difference tangents for a smooth, continuous curve.
         slopes = []
@@ -874,6 +873,14 @@ class HVP2PBackend(QObject):
             else:
                 dx = max(1e-9, pts[i+1]["x"] - pts[i-1]["x"])
                 slopes.append((pts[i+1]["y"] - pts[i-1]["y"]) / dx)
+
+        # P1/P5 may sit anywhere inside the actual span. Continue the reference
+        # geometry to the Near/Far supports using the same endpoint tangent so
+        # the cable path does not artificially become flat outside P1/P5.
+        if xv <= pts[0]["x"]:
+            return float(pts[0]["y"]) + slopes[0] * (xv - float(pts[0]["x"]))
+        if xv >= pts[-1]["x"]:
+            return float(pts[-1]["y"]) + slopes[-1] * (xv - float(pts[-1]["x"]))
 
         for i in range(len(pts) - 1):
             p0, p1 = pts[i], pts[i+1]
@@ -891,18 +898,38 @@ class HVP2PBackend(QObject):
 
     @classmethod
     def _geometry_z(cls, x, geometry):
-        """Top-view Z uses only P1 and P5, with P2..P4 lying on that line."""
-        pts = cls._normalised_geometry(geometry)
-        if not pts:
+        """Top-view Z uses P1/P5 to define a line across the whole cable span.
+
+        P1 and P5 are reference points, not endpoints. The line is therefore
+        extrapolated through them to Near/Far instead of clamping Z outside the
+        P1..P5 interval.
+        """
+        raw = [p for p in list(geometry or []) if isinstance(p, dict)]
+        if not raw:
             return 0.0
-        p0, p1 = pts[0], pts[-1]
-        z0 = float(p0["z"] or 0.0)
-        z1 = float(p1["z"] or 0.0)
-        span = max(1e-9, p1["x"] - p0["x"])
-        t = max(0.0, min(1.0, (float(x) - p0["x"]) / span))
+        # Z remains an intentionally two-point definition: P1 and P5. Do not
+        # choose the lowest/highest-X geometry points here, because P2..P4 may
+        # legitimately sit outside either reference point's X position.
+        p0 = raw[0]
+        p1 = raw[4] if len(raw) >= 5 else raw[-1]
+        x0 = float(p0.get("x", 0.0))
+        x1 = float(p1.get("x", x0 + 1.0))
+        z0 = float(p0.get("z", 0.0) or 0.0)
+        z1 = float(p1.get("z", 0.0) or 0.0)
+        dx = x1 - x0
+        if abs(dx) < 1e-9:
+            return z0
+        t = (float(x) - x0) / dx
         return z0 + (z1-z0)*t
 
-    def _cable_y_at(self, x, geometry, cable_weight, tension, skate_weight, highline, skate_x):
+    def _cable_span_bounds(self):
+        """Return Free-D X bounds relative to the calibrated Near Limit."""
+        near = float(self.state.near_limit.position_m or 0.0)
+        far = float(self.state.far_limit.position_m or 0.0)
+        return 0.0, max(0.1, far - near)
+
+    def _cable_y_at(self, x, geometry, cable_weight, tension, skate_weight, highline,
+                    skate_x, support0=None, support1=None):
         """Physical side-view cable height at X.
 
         The single canonical sag model deliberately uses *all four* operator
@@ -912,8 +939,10 @@ class HVP2PBackend(QObject):
           - Cable Tension: kgf, per individual highline cable (legacy SRVR rule).
           - Highline Mode: Single carries all Skate Weight; Dual shares it 50/50.
 
-        Cable self-weight is represented by the standard small-sag parabolic
-        horizontal-tension approximation.  The skate is a moving point load.
+        Near/Far are the cable supports. P1..P5 are geometry/control points and
+        may be anywhere between them. Cable self-weight is represented by the
+        standard small-sag parabolic horizontal-tension approximation. The skate
+        is a moving point load.
         With kg mass values and kgf tension, gravitational acceleration cancels
         in the load/tension ratio.  The result is subtracted from the smooth
         operator-entered P1..P5 reference-height profile.
@@ -924,7 +953,10 @@ class HVP2PBackend(QObject):
         pts = self._normalised_geometry(geometry)
         if len(pts) < 2:
             return self._smooth_geometry_y(x, pts)
-        support0, support1 = pts[0]["x"], pts[-1]["x"]
+        if support0 is None or support1 is None:
+            support0, support1 = self._cable_span_bounds()
+        support0 = float(support0)
+        support1 = float(support1)
         span = max(0.1, support1-support0)
         xv = max(support0, min(support1, float(x)))
         rel_x = xv-support0
@@ -952,8 +984,16 @@ class HVP2PBackend(QObject):
 
         return self._smooth_geometry_y(xv, pts) - max(0.0, cable_drop + point_drop)
 
-    def _cable_profile(self, snap=None, samples=121):
-        """Return the single canonical cable profile used by Run and Free-D."""
+    def _cable_profile(self, snap=None, samples=121, moving_skate_path=False):
+        """Return a calculated profile across the complete Near/Far span.
+
+        Run uses the instantaneous cable shape with its point load at the live
+        skate position, preserving the approved live-page behaviour. Free-D uses
+        moving_skate_path=True so each sample answers "what is the cable/skate Y
+        when the skate is at this X?". That full-run camera path remains useful
+        while the rig is offline or parked at a support and makes all sag inputs
+        visible during staged Free-D configuration.
+        """
         cfg = snap if isinstance(snap, dict) else None
         geometry = [dict(p) for p in (cfg.get("geometry", self.geometry) if cfg else self.geometry)]
         cable_weight = float(cfg.get("cable_weight_kg100m", self.cable_weight_kg100m) if cfg else self.cable_weight_kg100m)
@@ -963,17 +1003,22 @@ class HVP2PBackend(QObject):
         pts = self._normalised_geometry(geometry)
         if len(pts) < 2:
             return []
-        x0, x1 = pts[0]["x"], pts[-1]["x"]
+        x0, x1 = self._cable_span_bounds()
         span = max(0.1, x1-x0)
-        skate_x = float(self.state.pos_m or 0.0) - float(self.state.near_limit.position_m or 0.0)
+        live_skate_x = float(self.state.pos_m or 0.0) - float(self.state.near_limit.position_m or 0.0)
+        live_skate_x = max(x0, min(x1, live_skate_x))
         count = max(16, int(samples))
         result = []
         for i in range(count):
             x = x0 + span * i / max(1, count-1)
+            load_x = x if moving_skate_path else live_skate_x
             result.append({
                 "x": float(x),
-                "y": float(self._cable_y_at(x, pts, cable_weight, tension, skate_weight, highline, skate_x)),
-                "z": float(self._geometry_z(x, pts)),
+                "y": float(self._cable_y_at(x, pts, cable_weight, tension,
+                                             skate_weight, highline, load_x, x0, x1)),
+                # Z is intentionally defined by the identities P1/P5, not by
+                # whichever points become first/last after Y interpolation sorts X.
+                "z": float(self._geometry_z(x, geometry)),
             })
         return result
 
@@ -989,10 +1034,11 @@ class HVP2PBackend(QObject):
 
         x = float(self.state.pos_m or 0.0) - float(self.state.near_limit.position_m or 0.0)
         pts = self._normalised_geometry(geometry)
-        if len(pts) >= 2:
-            x = max(pts[0]["x"], min(pts[-1]["x"], x))
-        y = self._cable_y_at(x, pts, cable_weight, tension, skate_weight, highline, x)
-        z = self._geometry_z(x, pts)
+        support0, support1 = self._cable_span_bounds()
+        x = max(support0, min(support1, x))
+        y = self._cable_y_at(x, pts, cable_weight, tension, skate_weight,
+                             highline, x, support0, support1)
+        z = self._geometry_z(x, geometry)
         return (
             x + float(output_offsets.get("X",0.0)),
             y + float(output_offsets.get("Y",0.0)),
@@ -1165,7 +1211,7 @@ class HVP2PBackend(QObject):
         if isinstance(geom, list) and len(geom) >= 5:
             self.geometry = [dict(geom[i]) for i in range(5)]
             for i, g in enumerate(self.geometry):
-                g["name"] = str(g.get("name") or ("P1 (Near)" if i == 0 else "P5 (Far)" if i == 4 else f"P{i+1}"))
+                g["name"] = f"P{i+1}"
                 g["x"] = float(g.get("x", i*25.0))
                 g["y"] = float(g.get("y", 0.0))
                 g["z"] = float(g.get("z", 0.0) or 0.0) if i in (0,4) else None
@@ -1347,7 +1393,7 @@ class HVP2PBackend(QObject):
             for i in range(5):
                 src = geom[i] if isinstance(geom[i], dict) else snap["geometry"][i]
                 d = dict(snap["geometry"][i]); d.update(src)
-                d["name"] = str(d.get("name") or ("P1 (Near)" if i == 0 else "P5 (Far)" if i == 4 else f"P{i+1}"))
+                d["name"] = f"P{i+1}"
                 try: d["x"] = float(d.get("x", i*25.0))
                 except Exception: d["x"] = float(i*25.0)
                 try: d["y"] = float(d.get("y", 0.0))
@@ -1483,18 +1529,18 @@ class HVP2PBackend(QObject):
                 lp.ramp_percentage = max(0.0, min(100.0, float(r.get("percentage", 10.0))))
 
             default_geometry = [
-                {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
+                {"name":"P1","x":0.0,"y":0.0,"z":0.0},
                 {"name":"P2","x":25.0,"y":5.0,"z":None},
                 {"name":"P3","x":50.0,"y":8.0,"z":None},
                 {"name":"P4","x":75.0,"y":5.0,"z":None},
-                {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
+                {"name":"P5","x":100.0,"y":0.0,"z":0.0},
             ]
             g = c.get("geometry") if isinstance(c.get("geometry"), list) else default_geometry
             self.geometry = []
             for i in range(5):
                 src = g[i] if i < len(g) and isinstance(g[i], dict) else default_geometry[i]
                 d = default_geometry[i].copy(); d.update(src)
-                d["name"] = str(d.get("name") or default_geometry[i]["name"])
+                d["name"] = f"P{i+1}"
                 d["x"] = float(d.get("x", default_geometry[i]["x"]))
                 d["y"] = float(d.get("y", default_geometry[i]["y"]))
                 if i in (0,4): d["z"] = float(d.get("z", 0.0) or 0.0)
@@ -1714,9 +1760,10 @@ class HVP2PBackend(QObject):
     def geometryPoints(self): return self.geometry
     @Property('QVariantList', notify=stateChanged)
     def cableProfile(self):
-        # Staged Free-D edits are previewed immediately in BOTH diagrams.  Apply
-        # still controls what is transmitted on the live Free-D output.
-        return self._cable_profile()
+        # Run always uses the last-applied Free-D geometry/sag configuration.
+        # It retains the live instantaneous cable-shape view. The Free-D page
+        # has a separate moving-skate loaded-path draft preview property below.
+        return self._cable_profile(moving_skate_path=False)
     @Property('QVariantMap', notify=stateChanged)
     def freeDInput(self):
         r=self.freed_in_raw; d=self.freed_in
@@ -1827,7 +1874,8 @@ class HVP2PBackend(QObject):
 
     @Property('QVariantList', notify=stateChanged)
     def freeDPreviewCableProfile(self):
-        return self._cable_profile(getattr(self, "_freed_draft", self._freed_snapshot()))
+        return self._cable_profile(getattr(self, "_freed_draft", self._freed_snapshot()),
+                                   moving_skate_path=True)
 
     @Property('QVariantMap', notify=configChanged)
     def calibrationSummary(self):
@@ -2607,7 +2655,11 @@ class HVP2PBackend(QObject):
         i, axis = int(index), str(axis).lower()
         if not 0 <= i < 5 or axis not in ("x","y","z"): return
         if axis == "z" and i not in (0,4): return
-        self._freed_draft["geometry"][i][axis] = float(value)
+        v = float(value)
+        if axis == "x":
+            span0, span1 = self._cable_span_bounds()
+            v = max(span0, min(span1, v))
+        self._freed_draft["geometry"][i][axis] = v
         self._freed_draft_dirty = True
         self._notify_config()
 

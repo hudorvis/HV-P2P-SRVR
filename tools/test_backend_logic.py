@@ -29,7 +29,7 @@ from backend import (
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.14", smoke_test=True)
+b = HVP2PBackend(version="26.08.17.15", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -350,15 +350,18 @@ try:
     b.state.near_limit.position_m = 0.0
     b.state.far_limit.position_m = 100.0
     b.state.pos_m = 50.0
-    # This block tests the applied physical model itself, so set the live
-    # geometry directly. setGeometryPoint() is intentionally draft-only in v14.
+    # Geometry points are deliberately inboard. Near/Far, not P1/P5, define
+    # the physical cable supports and the complete Free-D X domain.
     b.geometry = [
-        {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
-        {"name":"P2","x":25.0,"y":0.0,"z":None},
+        {"name":"P1","x":10.0,"y":0.0,"z":0.0},
+        {"name":"P2","x":30.0,"y":0.0,"z":None},
         {"name":"P3","x":50.0,"y":0.0,"z":None},
-        {"name":"P4","x":75.0,"y":0.0,"z":None},
-        {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
+        {"name":"P4","x":70.0,"y":0.0,"z":None},
+        {"name":"P5","x":90.0,"y":0.0,"z":0.0},
     ]
+    span_profile = b._cable_profile(samples=101)
+    assert abs(span_profile[0]["x"] - 0.0) < 1e-9
+    assert abs(span_profile[-1]["x"] - 100.0) < 1e-9
     b.cable_weight_kg100m = 0.0
     b.cable_tension_kg = 100.0
     b.skate_weight_kg = 20.0
@@ -369,28 +372,38 @@ try:
     assert single_y < dual_y < 0.0, (single_y, dual_y)
     assert abs(single_y + 5.0) < 1e-6 and abs(dual_y + 2.5) < 1e-6
 
-    # The exact SAME canonical cable profile drives Run and Free-D. Changing
-    # cable tension must immediately change the calculated side-view sag.
+    # The loaded-path profile is independent of the current parked position.
+    # This is important for offline Free-D configuration: changing Single/Dual
+    # must visibly alter the whole-run sag preview even if the skate is at Near.
+    b.state.pos_m = 0.0
+    b.cable_weight_kg100m = 0.0
+    b.cable_tension_kg = 100.0
+    b.skate_weight_kg = 20.0
+    b.highline_mode = "Single Highline"
+    single_profile_mid = b._cable_profile(samples=101, moving_skate_path=True)[50]["y"]
+    b.highline_mode = "Dual Highline"
+    dual_profile_mid = b._cable_profile(samples=101, moving_skate_path=True)[50]["y"]
+    assert single_profile_mid < dual_profile_mid < 0.0, (single_profile_mid, dual_profile_mid)
+
+    # The Free-D loaded-path preview uses the same sag equation as live XYZ.
+    # Changing cable tension must immediately change the calculated sag.
     b.skate_weight_kg = 0.0
     b.cable_weight_kg100m = 4.5
     b.highline_mode = "Single Highline"
+    b.cable_tension_kg = 100.0
+    nominal_self_weight_mid = b._cable_profile(samples=101, moving_skate_path=True)[50]["y"]
+    assert abs(nominal_self_weight_mid + 0.5625) < 1e-9, nominal_self_weight_mid
     b.cable_tension_kg = 50.0
-    low_tension_profile = b._cable_profile(samples=101)
+    low_tension_profile = b._cable_profile(samples=101, moving_skate_path=True)
     low_mid = low_tension_profile[len(low_tension_profile)//2]["y"]
     b.cable_tension_kg = 200.0
-    high_tension_profile = b._cable_profile(samples=101)
+    high_tension_profile = b._cable_profile(samples=101, moving_skate_path=True)
     high_mid = high_tension_profile[len(high_tension_profile)//2]["y"]
     assert low_mid < high_mid <= 0.0, (low_mid, high_mid)
 
     # Every Free-D sag input must materially participate in the same canonical
     # model used by the UI and Free-D Y output.
-    b.geometry = [
-        {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
-        {"name":"P2","x":25.0,"y":0.0,"z":None},
-        {"name":"P3","x":50.0,"y":0.0,"z":None},
-        {"name":"P4","x":75.0,"y":0.0,"z":None},
-        {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
-    ]
+    # Keep P1/P5 inboard for every physical-sag assertion below.
     b.state.pos_m = 50.0
     b.skate_weight_kg = 20.0
     b.cable_weight_kg100m = 4.5
@@ -425,15 +438,19 @@ try:
                              b.highline_mode, 50.0)
     assert abs(b._xyz()[1] - direct_y) < 1e-9
 
-    # Top-view Z is a complete cable line: P2/P3/P4 lie on the P1-P5
-    # interpolation even though those intermediate Z fields are intentionally disabled.
+    # Top-view Z is a complete Near-to-Far line defined by P1/P5. Because P1
+    # and P5 are inboard here, Z must extrapolate through them to both supports.
+    # P2/P4 are deliberately moved outside P1/P5 in X to prove sorting the Y
+    # interpolation cannot steal the P1/P5 identity from the Z definition.
+    b.geometry[1]["x"] = 5.0
+    b.geometry[3]["x"] = 95.0
     b.geometry[0]["z"] = 1.0
     b.geometry[4]["z"] = 5.0
     z_profile = b._cable_profile(samples=17)
     assert len(z_profile) >= 17
-    assert abs(z_profile[0]["z"] - 1.0) < 1e-9
+    assert abs(z_profile[0]["z"] - 0.5) < 1e-9
     assert abs(z_profile[len(z_profile)//2]["z"] - 3.0) < 1e-9
-    assert abs(z_profile[-1]["z"] - 5.0) < 1e-9
+    assert abs(z_profile[-1]["z"] - 5.5) < 1e-9
     b.geometry[0]["z"] = 0.0
     b.geometry[4]["z"] = 0.0
     # Restore the requested nominal values for the staged Apply test.
@@ -457,6 +474,26 @@ try:
     old_p2_z = b.freeDDraft["geometry"][1]["z"]
     b.setGeometryPoint(1, "z", 99.0)
     assert b.freeDDraft["geometry"][1]["z"] == old_p2_z is None, "P2 Z must remain disabled"
+
+    # Every sag input must update the staged Free-D Side View immediately,
+    # while the live/applied Free-D state remains untouched until Apply.
+    b.setWeightValue("Skate", 20.0)
+    b.setWeightValue("Cable", 4.5)
+    b.setWeightValue("Tension", 100.0)
+    b.setHighlineMode("Single Highline")
+    draft_base = b.freeDPreviewCableProfile[len(b.freeDPreviewCableProfile)//2]["y"]
+    b.setWeightValue("Skate", 40.0)
+    assert b.freeDPreviewCableProfile[len(b.freeDPreviewCableProfile)//2]["y"] < draft_base
+    b.setWeightValue("Skate", 20.0)
+    b.setWeightValue("Cable", 9.0)
+    assert b.freeDPreviewCableProfile[len(b.freeDPreviewCableProfile)//2]["y"] < draft_base
+    b.setWeightValue("Cable", 4.5)
+    b.setWeightValue("Tension", 200.0)
+    assert b.freeDPreviewCableProfile[len(b.freeDPreviewCableProfile)//2]["y"] > draft_base
+    b.setWeightValue("Tension", 100.0)
+    b.setHighlineMode("Dual Highline")
+    assert b.freeDPreviewCableProfile[len(b.freeDPreviewCableProfile)//2]["y"] > draft_base
+
     b.setLensType("i24")
     b.setLensScale("Manual")
     b.setLensCalibration("zoom_wide", -100.0)

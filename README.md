@@ -1,25 +1,22 @@
-# HV P2P SRVR v26.08.17.14 — Qt Quick macOS Intel test build
+# HV P2P SRVR v26.08.17.15 — Qt Quick macOS Intel test build
 
-This is a narrow maintenance revision from the approved **v26.08.17.13** Qt Quick build. The locked Run, Setup, Free-D and Log page design, shared shell, heading palette and existing control architecture remain unchanged except for the four requested fixes below.
+This is a narrow Free-D geometry/sag correction from the approved **v26.08.17.14** Qt Quick build. The locked Run, Setup, Free-D and Log page design, shared shell, colour/style system and existing control architecture remain unchanged except for the Free-D span/sag behaviour described below.
 
-## v26.08.17.14 changes
+## v26.08.17.15 changes
 
-- Adds the missing AUX assignment choices **Preset 1 Save** through **Preset 10 Save** to the same shared list used by both CTRL-TS AUX Assign and W1P-TS AUX Assign.
-- Makes Setup **Save Config** and **Load Config** functional with native Qt file dialogs:
-  - Save Config exports the currently **applied** complete configuration to a transferable `.hvp2p.json` / `.json` file.
-  - Load Config reads a transfer file into the Setup and Free-D **drafts** without silently changing live operation.
-  - Imported Setup/Run configuration is committed only by **Setup → Apply**; imported Free-D configuration is committed only by **Free-D → Apply**.
-- Enforces true Apply/Reset editing on Setup and Free-D:
-  - Setup fields edit `setupDraft` only. Run/motion/network values do not change merely because text was edited or the page was changed.
-  - Free-D fields edit `freeDDraft` only. Live Free-D network output continues to use the last-applied settings until Apply.
-  - Page navigation preserves unapplied draft edits.
-  - **Apply** atomically commits that page's draft and saves it.
-  - **Reset** discards the page's unapplied draft and restores the latest applied/saved values.
-  - The Joystick Left/Centre/Right wizard now stages its accepted calibration in Setup as well; it is not committed until Setup Apply.
-  - Save Config deliberately exports applied values only, never un-applied drafts.
-- Corrects the Setup Motion Profiles vertical containment so the divider above **DRIVE BEHAVIOUR** no longer overlaps the **Stop Deceleration** row.
+- Corrects the Free-D geometry model so **Near Limit and Far Limit are the actual cable-span endpoints**. P1, P2, P3, P4 and P5 are now independent geometry/reference points that may be positioned anywhere within that calibrated span.
+- Removes the old internal `P1 (Near)` / `P5 (Far)` semantics. Existing configurations are normalised to the neutral `P1` ... `P5` labels when loaded.
+- The Top View now extends the P1/P5 Z reference line through the complete Near-to-Far span instead of clamping the line at P1 and P5. P2-P4 Z remains intentionally disabled.
+- The Side View calculated profile is now the **loaded skate/camera path across the whole run**. At every X sample, the skate point load is evaluated at that X. This matches the Free-D Y calculation at the live skate position and allows the full-run preview to be meaningful even while the rig is offline or parked at a support.
+- The sag calculation uses all four operator inputs in one model:
+  - **Skate Weight** is the suspended skate/camera package mass.
+  - **Cable Weight** is cable mass per 100 m, per individual highline cable.
+  - **Cable Tension** is treated as per-cable horizontal tension in kgf/lbf-equivalent units for the existing small-sag model.
+  - **Dual Highline** shares the skate package 50/50 between the two cables; each cable retains its own self-weight and entered per-cable tension.
+- The Free-D diagram vertical scale is now anchored to the entered geometry/reference points and Near/Far support heights. It no longer automatically zooms around ordinary sag changes, which previously made different Skate Weight / Cable Weight / Cable Tension / Highline Mode values look almost identical. Extreme profiles can still expand the scale to avoid severe clipping.
+- Free-D Apply/Reset behaviour remains unchanged: all of the above changes are previewed from `freeDDraft`, while the live Free-D output continues using the last-applied configuration until **Apply** is selected.
 
-Everything else remains locked to the approved v26.08.17.13 design and functionality, including the common blue `#26d5ff` heading treatment, Run page geometry, Free-D layout, Log page, shared shell/footer, CTRL/W1P safety and motion behaviour, calibration flows, Free-D calculations and logging.
+Everything else remains locked to the approved v26.08.17.14 design and functionality.
 
 ## Compatibility and safety notes
 
@@ -53,11 +50,11 @@ The workflow builds macOS Intel (`x86_64`) only. Development builds remain unsig
 
 After a successful GitHub Actions run, download:
 
-`HV-P2P-SRVR-v26.08.17.14-macOS-Intel`
+`HV-P2P-SRVR-v26.08.17.15-macOS-Intel`
 
 The artifact contains:
 
-`HV P2P SRVR v26.08.17.14 macOS Intel.zip`
+`HV P2P SRVR v26.08.17.15 macOS Intel.zip`
 
 That ZIP contains the single `HV P2P SRVR.app` bundle with the existing P2P SRVR icon and bundle/display metadata.
 

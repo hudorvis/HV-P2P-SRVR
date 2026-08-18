@@ -132,13 +132,49 @@ Item {
         function verticalRange(key) {
             var vals=[]
             var list=root.cableProfile
-            if (list) {
-                for(var i=0;i<list.length;i++) vals.push(Number(list[i][key]))
-            }
             if (root.showGeometryPoints && root.geometryPoints) {
+                // Free-D is an engineering preview. Do not auto-zoom the Y/Z
+                // scale around the calculated sag itself: doing so makes a
+                // deeper/shallower sag look almost unchanged when Skate Weight,
+                // Cable Weight, Cable Tension or Highline Mode is edited.
+                // Anchor the scale to the operator geometry/reference points and
+                // the two actual Near/Far support heights instead. The calculated
+                // curve then moves visibly inside a stable scale. Only expand the
+                // scale if the result would otherwise be clipped badly.
                 for(var j=0;j<root.geometryPoints.length;j++) {
                     vals.push(root.sideView ? Number(root.geometryPoints[j].y) : geometryZ(j))
                 }
+                if (list && list.length>1) {
+                    vals.push(Number(list[0][key]))
+                    vals.push(Number(list[list.length-1][key]))
+                }
+                if(vals.length===0) vals=[0]
+                var refLo=Math.min.apply(Math,vals), refHi=Math.max.apply(Math,vals)
+                if(!isFinite(refLo) || !isFinite(refHi)){refLo=-1;refHi=1}
+                var refSpan=Math.max(0.25,refHi-refLo)
+                var xSpan=Math.max(0.001,domainMax()-domainMin())
+                var margin=Math.max(1.0,refSpan*0.35,xSpan*0.06)
+                var lo=refLo-margin, hi=refHi+margin
+
+                if (list) {
+                    var curveLo=Infinity, curveHi=-Infinity
+                    for(var k=0;k<list.length;k++) {
+                        var cv=Number(list[k][key])
+                        if(!isFinite(cv)) continue
+                        curveLo=Math.min(curveLo,cv)
+                        curveHi=Math.max(curveHi,cv)
+                    }
+                    // Preserve the stable reference scale for ordinary edits;
+                    // expand only when an extreme configuration would clip.
+                    if(isFinite(curveLo) && curveLo<lo) lo=curveLo-margin*0.15
+                    if(isFinite(curveHi) && curveHi>hi) hi=curveHi+margin*0.15
+                }
+                return {lo:lo, hi:hi}
+            }
+
+            // Run page retains the locked automatic scaling behaviour.
+            if (list) {
+                for(var i=0;i<list.length;i++) vals.push(Number(list[i][key]))
             }
             if(vals.length===0) vals=[0]
             var lo=Math.min.apply(Math,vals), hi=Math.max.apply(Math,vals)

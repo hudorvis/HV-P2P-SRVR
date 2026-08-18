@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.14"
+VERSION = "26.08.17.15"
 ERRORS: list[str] = []
 
 
@@ -187,6 +187,17 @@ require("_kg_to_lb" in backend and "_lb_to_kg" in backend,
         "kg/lbs automatic conversion support missing")
 require("skate_per_line" in backend and "point_drop" in backend and "highline_mode" in backend,
         "Skate Weight / Dual Highline sag model is not active in Free-D calculation")
+require('def _cable_span_bounds' in backend and
+        'x0, x1 = self._cable_span_bounds()' in backend and
+        'load_x = x if moving_skate_path else live_skate_x' in backend and
+        'skate_weight, highline, load_x, x0, x1' in backend,
+        "Free-D loaded path is still using P1/P5 or the live skate position as the whole-span support model")
+require('P1 and P5 are reference points, not endpoints' in backend and
+        't = (float(x) - x0) / dx' in backend,
+        "Top-view P1/P5 reference line is still clamped to P1..P5 instead of extending to Near/Far")
+require('P1 (Near)' not in backend and 'P5 (Far)' not in backend and
+        'P1 (Near)' not in qml_main and 'P5 (Far)' not in qml_main,
+        "P1/P5 are still semantically locked to Near/Far endpoints")
 require('getattr(self, "_saved_freed_snapshot"' in backend and 'def _send_freed' in backend,
         "live Free-D output is not using the last-applied settings snapshot")
 
@@ -204,6 +215,10 @@ require(qml_main.count('showGeometryPoints:true') >= 2 and qml_main.count('showP
         "Run/Free-D marker overlays are not separated correctly")
 require('property var cableProfile' in span_qml and 'Canonical calculated cable line' in span_qml,
         "shared SpanDiagram calculated profile rendering is missing")
+require('Free-D is an engineering preview' in span_qml and
+        'Anchor the scale to the operator geometry/reference points' in span_qml and
+        'Run page retains the locked automatic scaling behaviour' in span_qml,
+        "Free-D diagram can still auto-zoom away visible sag changes, or Run scaling was altered")
 require('c.moveTo(sx,sy+8)' not in span_qml and 'fov' not in span_qml.lower(),
         "Run diagram still contains camera/FOV guide drawing")
 require('def _cable_profile' in backend and 'def _cable_y_at' in backend and 'def _smooth_geometry_y' in backend,

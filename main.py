@@ -31,7 +31,7 @@ import PySide6.QtQuickControls2  # noqa: F401
 
 from backend import HVP2PBackend
 
-APP_VERSION = "26.08.17.14"
+APP_VERSION = "26.08.17.15"
 
 
 def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: HVP2PBackend) -> bool:
@@ -175,14 +175,16 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         # The shared Run/Free-D cable profile must react to tension changes.
         backend.state.near_limit.position_m = 0.0
         backend.state.far_limit.position_m = 100.0
-        backend.state.pos_m = 50.0
+        backend.state.pos_m = 0.0
         backend.geometry = [
-            {"name":"P1 (Near)","x":0.0,"y":0.0,"z":0.0},
-            {"name":"P2","x":25.0,"y":0.0,"z":None},
+            {"name":"P1","x":10.0,"y":0.0,"z":0.0},
+            {"name":"P2","x":30.0,"y":0.0,"z":None},
             {"name":"P3","x":50.0,"y":0.0,"z":None},
-            {"name":"P4","x":75.0,"y":0.0,"z":None},
-            {"name":"P5 (Far)","x":100.0,"y":0.0,"z":0.0},
+            {"name":"P4","x":70.0,"y":0.0,"z":None},
+            {"name":"P5","x":90.0,"y":0.0,"z":0.0},
         ]
+        if abs(float(backend.cableProfile[0]["x"])) > 1e-9 or abs(float(backend.cableProfile[-1]["x"]) - 100.0) > 1e-9:
+            raise RuntimeError("P1/P5 incorrectly became cable-span endpoints")
         backend.skate_weight_kg = 0.0
         backend.cable_weight_kg100m = 4.5
         backend.cable_tension_kg = 50.0
@@ -192,22 +194,26 @@ def _exercise_qml(app: QGuiApplication, engine: QQmlApplicationEngine, backend: 
         if not low_tension_mid < high_tension_mid:
             raise RuntimeError("Cable Tension did not update calculated sag profile")
 
-        # Exercise every operator sag input on the real Qt/macOS smoke path.
-        backend.cable_tension_kg = 100.0
-        backend.cable_weight_kg100m = 4.5
-        backend.skate_weight_kg = 20.0
-        backend.highline_mode = "Single Highline"
-        base_mid = backend.cableProfile[len(backend.cableProfile)//2]["y"]
-        backend.skate_weight_kg = 40.0
-        if not backend.cableProfile[len(backend.cableProfile)//2]["y"] < base_mid:
+        # Exercise every operator sag input on the real Qt/macOS Free-D preview
+        # path. The rig is deliberately parked at Near: the moving-skate preview
+        # must still show the loaded path across the complete run.
+        backend._freed_draft_dirty = False
+        backend.beginFreeDEdit()
+        backend.setWeightValue("Tension", 100.0)
+        backend.setWeightValue("Cable", 4.5)
+        backend.setWeightValue("Skate", 20.0)
+        backend.setHighlineMode("Single Highline")
+        base_mid = backend.freeDPreviewCableProfile[len(backend.freeDPreviewCableProfile)//2]["y"]
+        backend.setWeightValue("Skate", 40.0)
+        if not backend.freeDPreviewCableProfile[len(backend.freeDPreviewCableProfile)//2]["y"] < base_mid:
             raise RuntimeError("Skate Weight did not affect calculated sag profile")
-        backend.skate_weight_kg = 20.0
-        backend.cable_weight_kg100m = 9.0
-        if not backend.cableProfile[len(backend.cableProfile)//2]["y"] < base_mid:
+        backend.setWeightValue("Skate", 20.0)
+        backend.setWeightValue("Cable", 9.0)
+        if not backend.freeDPreviewCableProfile[len(backend.freeDPreviewCableProfile)//2]["y"] < base_mid:
             raise RuntimeError("Cable Weight did not affect calculated sag profile")
-        backend.cable_weight_kg100m = 4.5
-        backend.highline_mode = "Dual Highline"
-        if not backend.cableProfile[len(backend.cableProfile)//2]["y"] > base_mid:
+        backend.setWeightValue("Cable", 4.5)
+        backend.setHighlineMode("Dual Highline")
+        if not backend.freeDPreviewCableProfile[len(backend.freeDPreviewCableProfile)//2]["y"] > base_mid:
             raise RuntimeError("Highline Mode did not affect calculated skate-load sag")
 
         # The shared status banner must retain the legacy SRVR software E-stop
