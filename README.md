@@ -1,30 +1,30 @@
-# HV P2P SRVR v26.08.17.16 — Qt Quick macOS Intel test build
+# HV P2P SRVR v26.08.19.01 — Qt Quick macOS Intel test build
 
-This is the final controller/interface validation revision from the approved **v26.08.17.15** Qt Quick build. The locked Run, Setup, Free-D and Log layouts, shared shell, colour/style system and existing motion/safety architecture remain unchanged. The only visible UI change is the requested Free-D Side View geometry-marker correction; the remaining changes restore proven CTRL/W1P integration paths that were present in the stable pre-Qt SRVR backend but had not been carried into the Qt migration.
+This is the controller/interface integration revision from the approved **v26.08.17.15** Qt Quick build. The locked Run, Setup, Free-D and Log layouts, shared shell and colour/style system remain the visual baseline. Visible integration changes are limited to the requested Free-D Side View geometry-marker correction and the CTRL-TS five-AUX top row; the remaining changes restore or strengthen proven CTRL/W1P protocol, configuration, motion and safety paths that were present in the stable pre-Qt system but had not been fully carried into the Qt migration.
 
-## v26.08.17.16 changes
+## v26.08.19.01 changes
 
-- **Free-D Side View P1-P5 markers now stay on the calculated cable path.** Each marker keeps its entered X coordinate but its displayed Y coordinate is sampled from the same calculated sagged profile used to draw the cable. The underlying editable geometry Y values are not overwritten. Top View P1/P5 Z behaviour is unchanged.
-- Restores the proven **CTRL `HMI_STATUS|...` parser** so Setup can independently report CTRL-TS and ADS1115 health instead of aliasing those indicators to the parent CTRL link.
-- Restores the proven **W1P `W1P_HMI_STATUS|...` parser** so Setup can independently report W1P-TS health.
-- Restores **physical AUX execution**:
-  - CTRL AUX1-AUX4 are handled as rising-edge inputs, so holding a button does not retrigger its action every 50 ms.
-  - W1P-TS `W1PTS_AUX N` events execute the currently applied W1P-TS AUX assignment.
-  - The current Setup action vocabulary is supported, including Drive Mode, Acceleration Mode, Battery Change Mode, Near/Far/Reference Save/Recall/Slip, and Preset 1-10 Save/Recall/Slip.
-- Restores the proven **SRVR -> CTRL `DSP1|...` display/status packet** on UDP port 5000. The CTRL firmware relays that packet to CTRL-TS as `HMI1|...`. This is a secondary display/status path only; joystick and safety control remain on the existing binary CTRL packet path.
-- The locked Setup UI still contains five stored AUX assignment rows. The currently proven CTRL firmware and current CTRL-TS interface expose **four physical AUX inputs**, and the stable W1P-TS event path likewise emits AUX1-AUX4. AUX5 therefore remains a stored/future assignment until matching controller firmware provides a fifth physical/event input.
+- **Five CTRL AUX actions end-to-end.** The existing A7 packet keeps its 16-bit flag field and adds AUX5 as bit `0x0400`. SRVR now accepts five CTRL AUX assignments, CTRL forwards touchscreen `AUX5`, and CTRL-TS renders five equal AUX tiles across the top row. Existing stored CTRL `main4` layouts are migrated to `main5` without losing their saved labels.
+- **State-aware CTRL-TS AUX labels restored.** SRVR again publishes operator-facing labels such as `Accel Mode | Speed`, `Drive Mode | <custom name>` and `Battery Change | On/Off`, plus calibration/preset action labels.
+- **Safety STOP / Servo Enable semantics strengthened.** Any SRVR-resolved safety source (SRVR E-stop, CTRL E-stop/loss, ADS1115 fault, W1P loss/E-stop or RS485/drive fault) requests the hard W1P `STOP` path plus `SW_SRVON 0`, rate-limited while the fault remains. After all sources clear, the joystick must pass through neutral before SRVR requests `SW_SRVON 1`; this prevents a held stick from restarting motion.
+- **Calibrated state is persistent.** `not_calibrated_mode` is now saved/restored so an already calibrated system does not return to service/un-calibrated mode after every SRVR restart.
+- **v26.06.26.25 config migration.** Legacy IP, joystick calibration, Mode A/B names and motion parameters, Accel Mode, AUX assignments, units-per-metre, limits/ramping, presets and relevant Free-D fields are migrated into schema version 2.
+- **Goto anti-hunt behaviour restored.** The proven approach-direction latch, stop-before-reverse rule, early deceleration and low-speed creep logic are restored so a small target crossing does not immediately create full-direction reversal/hunting.
+- **W1P diagnostics extended for software Servo Enable and the EL7 output map.** The integration SRVR parses `SW_SRVON*` plus DO2 Ready/SRDY, DO3 Enabled/SRV-ST, DO4 Brake/BRK-OFF and DO5 Fault/ALARM assignment/state fields from the matching v26.08.19.01 W1P firmware.
+- **EL7 output/brake assignment safety check.** Matching W1P firmware verifies/configures DO2=SRDY, DO3=SRV-ST, DO4=BRK-OFF and DO5=ALARM while motion is locked. If software SRV-ON is already active it is first dropped during migration, and is restored only after the full map is verified. The physical EL7 DO4 still has to be wired to the external 24 V brake relay/circuit.
+- **Free-D Side View P1-P5 markers remain locked to the calculated cable path.** Each marker keeps its entered X coordinate while its displayed Y coordinate is sampled from the same sagged profile used to draw the cable.
 
 ## Control-path audit
 
-The core motion and safety functions are unchanged from v26.08.17.15 in this revision. The final audit specifically verifies that these established paths remain intact:
+The core `.25` control contracts are retained, with the safety, calibration-direction, Goto and status fixes listed above. The final audit specifically verifies:
 
 - CTRL A6/A7 packet decoding and UDP/5000 heartbeat handling.
 - Two-packet/0.75 s CTRL fail-safe connection qualification.
-- Physical CTRL E-stop, ADS1115 fault, CTRL loss, W1P loss and W1P/RS485 fault aggregation.
+- Physical CTRL E-stop, ADS1115 fault, CTRL loss, W1P loss and W1P/RS485 fault aggregation, hard STOP + software Servo Enable inhibit, and neutral-return re-arm.
 - Joystick calibration/deadband, Mode and Battery Change controls, service-mode 5 km/h limit and post-calibration neutral-return interlock.
 - W1P `STATUS` parsing, position-jump sanity filtering and RS485/Leadshine health classification.
 - W1P commands: `SET_UNITS_PER_M`, `SET_MOTOR_REVERSE`, `SET_ACCEL`, `SET_DECEL`, `SET_CROSSOVER`, `SET_STOP_DECEL`, `SET_ACCEL_MODE`, `SET_SPAN`, `SET_LIMIT_NEAR`, `SET_LIMIT_FAR`, `SERVICE_MODE`, `VEL`, `SYNC_POS`, `STOP` and `SW_SRVON`.
-- Hard Near/Far limit enforcement, ramp zones, Goto target clamping/creep behaviour and live feedback speed.
+- Hard Near/Far limit enforcement, ramp zones, Goto target clamping/creep behaviour, live feedback speed and Limit Calibration auto-correction of Winch Invert when physical Near-to-Far travel initially reads negative.
 
 ## Operator/UI audit
 
@@ -61,11 +61,11 @@ The workflow builds macOS Intel (`x86_64`) only. Development builds remain unsig
 
 After a successful GitHub Actions run, download:
 
-`HV-P2P-SRVR-v26.08.17.16-macOS-Intel`
+`HV-P2P-SRVR-v26.08.19.01-macOS-Intel`
 
 The artifact contains:
 
-`HV P2P SRVR v26.08.17.16 macOS Intel.zip`
+`HV P2P SRVR v26.08.19.01 macOS Intel.zip`
 
 That ZIP contains the single `HV P2P SRVR.app` bundle with the existing P2P SRVR icon and bundle/display metadata.
 

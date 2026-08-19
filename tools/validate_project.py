@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "26.08.17.16"
+VERSION = "26.08.19.01"
 ERRORS: list[str] = []
 
 
@@ -451,7 +451,7 @@ for token in ('def setJoystickDeadband', 'def setPositionSource', 'def setDriveM
 for token in (
     'if line_text.startswith("HMI_STATUS|")', 'def _handle_ctrl_hmi_status',
     'if line.startswith("W1PTS_AUX")', 'if line.startswith("W1P_HMI_STATUS|")',
-    'def _handle_aux_action', 'CTRL_AUX_BITS = (FLAG_AUX1, FLAG_AUX2, FLAG_AUX3, FLAG_AUX4)',
+    'def _handle_aux_action', 'CTRL_AUX_BITS = (FLAG_AUX1, FLAG_AUX2, FLAG_AUX3, FLAG_AUX4, FLAG_AUX5)',
     'def _build_controller_display_packet', '"DSP1"', 'def _send_controller_display_packet',
     'self._send_controller_display_packet()',
 ):
@@ -467,6 +467,18 @@ require('profileValue(Number(gp.x), "y")' in span_qml and
         "Free-D Side View geometry markers are not pinned to the calculated cable profile")
 require('var gv=root.sideView ? profileValue(Number(gp.x), "y") : geometryZ(g)' in span_qml,
         "Top View P1/P5 Z behaviour changed while fixing Side View markers")
+
+# v26.08.19.01 integration contract: fifth CTRL-TS AUX travels in the spare A7
+# 16-bit flag, and display packets expose all five state-aware labels.
+require("FLAG_AUX5 = 0x0400" in backend, "AUX5 controller flag missing")
+require('f"aux5={labels[4]}"' in backend, "DSP1 AUX5 field missing")
+require('_ctrl_aux_last = [False] * 5' in backend, "five-AUX edge handling missing")
+require('not_calibrated_mode' in backend and 'config_schema_version' in backend,
+        "calibration-state persistence/config schema migration missing")
+require('def _send_safety_stop_limited' in backend and 'self._send_safety_stop_limited' in backend,
+        "hard STOP safety-transition path missing")
+require('def _start_goto_target' in backend and 'creep_back' in backend,
+        "Goto anti-overshoot direction latch missing")
 
 # Critical proven W1P/CTRL contract. SET_POSITION is specifically wrong for
 # cable-slip re-referencing on this system; the working backend uses SYNC_POS.

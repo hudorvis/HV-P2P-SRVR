@@ -27,11 +27,12 @@ from backend import (
     CONTROL_PACKET_CODE,
     FLAG_ADS1115_FAULT,
     FLAG_AUX1,
+    FLAG_AUX5,
     HMI_STATUS_TIMEOUT_S,
 )
 
 app = QCoreApplication.instance() or QCoreApplication([])
-b = HVP2PBackend(version="26.08.17.16", smoke_test=True)
+b = HVP2PBackend(version="26.08.19.01", smoke_test=True)
 
 try:
     # CTRL packet compatibility (A6 and extended A7).
@@ -74,7 +75,7 @@ try:
     assert display.startswith("DSP1|") and display.endswith("\n")
     assert "|speed_mps=-1.25|" in display and "|speed_kmh=-4.50|" in display
     for required in ("|ctrl=", "|srvr=1", "|w1p=", "|flags=", "|speed_mps=",
-                     "|aux1=", "|aux4=", "|preset_names=", "|preset_pos="):
+                     "|aux1=", "|aux4=", "|aux5=", "|preset_names=", "|preset_pos="):
         assert required in display, required
 
     # Simulate healthy live links for motion tests.
@@ -107,8 +108,16 @@ try:
     b._ctrl_flags = FLAG_ADS1115_FAULT
     b._motion_tick()
     assert b.state.estop_active, "ADS1115 fault did not enter safety state"
-    assert abs(b.requested_speed_mps) < 1e-9
+    assert abs(b.requested_speed_mps) < 1e-9 and b._safety_servo_inhibited
+    # Clearing a safety source while the joystick is still held must not restart
+    # or restore software Servo Enable.
     b._ctrl_flags = 0
+    b._ctrl_axis = 1.0
+    b._motion_tick()
+    assert b._joystick_neutral_required and b._safety_servo_inhibited and abs(b.requested_speed_mps) < 1e-9
+    b._ctrl_axis = 0.0
+    b._motion_tick()
+    assert not b._joystick_neutral_required and not b._safety_servo_inhibited and abs(b.requested_speed_mps) < 1e-9
 
     # Presets are stored relative to Near and recalled as absolute positions.
     b.state.near_limit.position_m = 10.0
@@ -126,7 +135,7 @@ try:
     b.state.pos_m = 40.0
     b._ctrl_axis = 0.0
     b._ctrl_flags = FLAG_AUX1
-    b._ctrl_aux_last = [False, False, False, False]
+    b._ctrl_aux_last = [False] * 5
     b._motion_tick()
     assert abs(float(b.preset_positions[0]) - 30.0) < 1e-9
     b.state.pos_m = 45.0
@@ -135,6 +144,16 @@ try:
     b._ctrl_flags = 0; b._motion_tick()
     b._ctrl_flags = FLAG_AUX1; b._motion_tick()
     assert abs(float(b.preset_positions[0]) - 35.0) < 1e-9
+    b._ctrl_flags = 0; b._motion_tick()
+
+    # AUX5 is a backward-compatible A7 extension used by the fifth CTRL-TS tile.
+    b.ctrl_aux_assignments[4] = "Acceleration Mode"
+    before_accel = b.acceleration_mode
+    b._ctrl_flags = FLAG_AUX5
+    b._motion_tick()
+    assert b.acceleration_mode != before_accel
+    display = b._build_controller_display_packet()
+    assert "|aux5=Accel Mode / " in display
     b._ctrl_flags = 0; b._motion_tick()
 
     # W1P-TS AUX messages use the same assignment executor. The proven current
@@ -163,6 +182,54 @@ try:
     b.renameDriveMode(1, "Cable Move")
     assert b.drive_modes[0]["name"] == "Camera Move"
     assert b.drive_modes[1]["name"] == "Cable Move"
+
+    # Exact v26.06.26.25 configuration keys migrate without losing Mode B
+    # dynamics, calibration state, AUX actions, limits, presets or Free-D weights.
+    legacy = {
+        "winch_host":"172.20.1.102", "controller_ip_ref":"172.20.1.101",
+        "joy_cal":{"min":-0.9,"center":0.02,"max":0.95},
+        "not_calibrated_mode":False, "accel_type":"Speed", "winch_units_per_m":21220.7,
+        "drive_modes":[
+            {"name":"Mode A","max_speed_mps":5,"max_goto_speed_mps":5,"max_accel_mps2":5,"max_decel_mps2":5,"max_crossover_mps2":10,"max_stop_decel_mps2":7.5},
+            {"name":"Mode B","max_speed_mps":20,"max_goto_speed_mps":10,"max_accel_mps2":10,"max_decel_mps2":10,"max_crossover_mps2":20,"max_stop_decel_mps2":15}],
+        "aux1_action":"Limit Calibration", "aux2_action":"Accel Mode", "aux3_action":"Battery Change", "aux4_action":"Drive Mode",
+        "near_limit":{"position_m":0,"ramp_mode":"Distance","ramp_distance_m":10,"ramp_percentage":None},
+        "ref_point":{"position_m":50}, "far_limit":{"position_m":100,"ramp_mode":"Distance","ramp_distance_m":10,"ramp_percentage":None},
+        "presets":[12.5,25.0], "preset_names":["Preset 1","Preset 2"], "preset_visible":[True,True],
+        "free_d":{"enabled":False,"weight_per_100m_kg":4.8,"sag_tension_kgf":1200.0,"height_points":[
+            {"y_m":0,"z_m":6,"z_offset_m":0},{"y_m":25,"z_m":0,"z_offset_m":0},{"y_m":50,"z_m":8,"z_offset_m":0},{"y_m":75,"z_m":0,"z_offset_m":0},{"y_m":100,"z_m":12,"z_offset_m":0}]}}
+    migrated, changed = b._migrate_config_dict(legacy)
+    assert changed and migrated["ctrl_ip"] == "172.20.1.101" and migrated["w1p_ip"] == "172.20.1.102"
+    modes = b._normalise_drive_modes(migrated["drive_modes"])
+    assert modes[1]["name"] == "Mode B" and modes[1]["goto_speed_mps"] == 10.0
+    assert modes[1]["accel_mps2"] == 10.0 and modes[1]["crossover_mps2"] == 20.0 and modes[1]["stop_decel_mps2"] == 15.0
+    assert migrated["ctrl_aux_assignments"][:4] == ["Limit Calibration","Acceleration Mode","Battery Change Mode","Drive Mode"]
+    assert migrated["preset_positions"][:2] == [12.5,25.0]
+    assert migrated["free_d"]["cable_weight_kg100m"] == 4.8 and migrated["free_d"]["cable_tension_kg"] == 1200.0
+    assert migrated["geometry"][2]["x"] == 50.0 and migrated["geometry"][2]["y"] == 8.0
+
+    # Limit calibration establishes Near->Far as the positive system axis even
+    # when physical rope/winch threading initially makes the Far move negative.
+    b.calibration_type = "Limit"
+    b.calibration_open = True
+    b.calibration_step = 1
+    b._not_calibrated = True
+    b.reverse_motor = False
+    b.state.pos_m = -80.0
+    b.calibrationNext()
+    assert b.reverse_motor, "negative Near->Far travel did not auto-correct Winch Invert"
+    assert abs(float(b.state.far_limit.position_m) - 80.0) < 1e-9
+    assert abs(float(b.state.pos_m) - 80.0) < 1e-9
+    assert b.calibration_step == 2 and b._not_calibrated
+
+    # Goto stops before reversing against forward momentum after crossing target.
+    b.current_speed_mps = 0.5
+    b._goto_approach_dir = 1.0
+    vel, reached = b._goto_velocity(-0.05)
+    assert not reached and abs(vel) < 1e-9
+    b.current_speed_mps = 0.01
+    vel, reached = b._goto_velocity(-0.05)
+    assert not reached and -0.12 <= vel < 0.0
 
     # Setup/System edit controls are real backend writes, not display-only fields.
     b.setNetwork("CTRL", "172.20.1.111")
@@ -733,11 +800,14 @@ try:
         fake_w1p.sent.clear(); b._sync_position(42.0)
         assert "VEL 0" in fake_w1p.sent and "SYNC_POS 42.000" in fake_w1p.sent
 
-        # SRVR software E-stop must issue immediate W1P STOP and servo-enable
-        # state changes, preserving the proven safety handshake.
+        # SRVR software E-stop must issue immediate W1P STOP + Servo Enable OFF.
+        # Clearing the latch deliberately keeps SW_SRVON OFF until the common
+        # safety-neutral path explicitly restores it.
         b._srvr_estop = False; fake_w1p.sent.clear(); b.toggleSrvrEStop()
         assert "STOP" in fake_w1p.sent and "SW_SRVON 0" in fake_w1p.sent
         fake_w1p.sent.clear(); b.toggleSrvrEStop()
+        assert "STOP" in fake_w1p.sent and "SW_SRVON 0" in fake_w1p.sent and "SW_SRVON 1" not in fake_w1p.sent
+        fake_w1p.sent.clear(); b._restore_servo_after_safety_neutral()
         assert "STOP" in fake_w1p.sent and "SW_SRVON 1" in fake_w1p.sent
 
         # The display packet is sent to the configured CTRL IP on UDP/5000 and
